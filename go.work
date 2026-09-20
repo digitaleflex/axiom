@@ -1,8 +1,0 @@
-go 1.22
-
-use (
-  ./services/engine
-  ./agents/agent
-  ./cli
-  ./sdk/go
-)
