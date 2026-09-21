@@ -1,0 +1,57 @@
+version: "0.1"
+contracts:
+  - id: architect
+    role: Architect
+    capabilities:
+      - architecture.design
+      - repository.read
+    inputs:
+      - business-specification
+    outputs:
+      - architecture-specification
+      - adr
+    forbidden_responsibilities:
+      - implementing_business_logic
+      - executing_production_deployment
+    quality_gates:
+      - architecture-completeness
+      - boundary-validation
+    permissions:
+      read: [project, repository, approved-artifacts]
+      write: [architecture-docs, adr]
+      execute: []
+      privileged: []
+      approval_required: []
+    runtime_limits:
+      max_execution_seconds: 900
+      max_retries: 2
+      network_access: false
+
+  - id: security
+    role: Security
+    capabilities:
+      - security.threat_model
+      - security.review
+      - repository.read
+    inputs:
+      - architecture-specification
+      - agent-contracts
+    outputs:
+      - threat-model
+      - security-review
+    forbidden_responsibilities:
+      - changing_business_rules
+      - granting_unrestricted_access
+    quality_gates:
+      - security-controls-explicit
+      - findings-resolved-or-accepted
+    permissions:
+      read: [project, repository, approved-artifacts, security-policy]
+      write: [security-docs, findings]
+      execute: []
+      privileged: []
+      approval_required: []
+    runtime_limits:
+      max_execution_seconds: 900
+      max_retries: 2
+      network_access: false
