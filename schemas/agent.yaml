@@ -1,0 +1,13 @@
+version: "0.1"
+agent:
+  id: example-agent
+  role: architect
+  capabilities: []
+  inputs: []
+  outputs: []
+  tools: []
+  forbidden_responsibilities: []
+  quality_gates: []
+  runtime_limits: {}
+
+# Normative fields and validation rules are defined by M2 before implementation.
