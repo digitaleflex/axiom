@@ -1,0 +1,52 @@
+version: "0.1"
+run:
+  id: run-reference-001
+  project_id: reference-saas
+  objective: "Build and deploy a reference SaaS project"
+  status: COMPLETED
+
+tasks:
+  - id: business-spec
+    role: business-domain
+    status: COMPLETED
+    outputs: [business-spec-v1]
+  - id: architecture
+    role: architect
+    depends_on: [business-spec]
+    status: COMPLETED
+    outputs: [architecture-v1, adr-set-v1]
+  - id: backend
+    role: backend
+    depends_on: [architecture]
+    status: COMPLETED
+    outputs: [backend-v1]
+  - id: frontend
+    role: frontend
+    depends_on: [architecture]
+    status: COMPLETED
+    outputs: [frontend-v1]
+  - id: database
+    role: database
+    depends_on: [architecture]
+    status: COMPLETED
+    outputs: [database-v1]
+  - id: security
+    role: security
+    depends_on: [backend, frontend, database]
+    status: COMPLETED
+    outputs: [security-review-v1]
+  - id: qa
+    role: qa
+    depends_on: [security]
+    status: COMPLETED
+    outputs: [qa-report-v1]
+  - id: deployment
+    role: infrastructure
+    depends_on: [qa]
+    status: COMPLETED
+    outputs: [deployment-plan-v1]
+  - id: runtime
+    role: runtime-agent
+    depends_on: [deployment]
+    status: COMPLETED
+    outputs: [runtime-result-v1]
