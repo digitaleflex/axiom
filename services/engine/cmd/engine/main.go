@@ -1,37 +1,45 @@
 package main
 
 import (
-	"encoding/json"
-	"log"
-	"net/http"
-	"os"
+	"context"
+	"errors"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/digitaleflex/axiom/services/engine/internal/config"
+	"github.com/digitaleflex/axiom/services/engine/internal/httpserver"
+	"github.com/digitaleflex/axiom/services/engine/internal/logger"
 )
 
-type healthResponse struct {
-	Status  string `json:"status"`
-	Service string `json:"service"`
-	Version string `json:"version"`
-}
-
 func main() {
-	port := os.Getenv("AXIOM_ENGINE_PORT")
-	if port == "" {
-		port = "8080"
-	}
+	cfg := config.Load()
+	log := logger.New()
+	server := httpserver.New(cfg)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(healthResponse{Status: "ok", Service: "axiom-engine", Version: "0.1.0-dev"})
-	})
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
-	})
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- server.ListenAndServe()
+	}()
 
-	log.Printf("Axiom Engine listening on :%s", port)
-	if err := http.ListenAndServe(":"+port, mux); err != nil {
-		log.Fatal(err)
+	log.Info("axiom engine started", "host", cfg.Host, "port", cfg.Port, "version", cfg.Version)
+
+	select {
+	case err := <-serverErr:
+		if !errors.Is(err, context.Canceled) {
+			log.Error("axiom engine stopped unexpectedly", "error", err)
+		}
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := server.ShutdownContext(shutdownCtx); err != nil {
+			log.Error("axiom engine shutdown failed", "error", err)
+			return
+		}
+		log.Info("axiom engine stopped")
 	}
 }
