@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"time"
 )
 
 type UserRepository struct{ db *sql.DB }
@@ -25,9 +24,12 @@ type Repositories struct {
 
 func NewRepositories(db *sql.DB) Repositories {
 	return Repositories{
-		Users: UserRepository{db: db}, GitHubConnections: GitHubConnectionRepository{db: db},
-		Repositories: RepositoryRepository{db: db}, Applications: ApplicationRepository{db: db},
-		Servers: ServerRepository{db: db}, Deployments: DeploymentRepository{db: db},
+		Users:             UserRepository{db: db},
+		GitHubConnections: GitHubConnectionRepository{db: db},
+		Repositories:      RepositoryRepository{db: db},
+		Applications:      ApplicationRepository{db: db},
+		Servers:           ServerRepository{db: db},
+		Deployments:       DeploymentRepository{db: db},
 	}
 }
 
@@ -79,17 +81,9 @@ func (r DeploymentRepository) Get(ctx context.Context, id string) (Deployment, e
 	return v, wrap("get deployment", err)
 }
 
-func withTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil { return wrap("begin transaction", err) }
-	if err := fn(tx); err != nil { _ = tx.Rollback(); return err }
-	if err := tx.Commit(); err != nil { return wrap("commit transaction", err) }
-	return nil
-}
-
 func wrap(operation string, err error) error {
-	if err == nil { return nil }
+	if err == nil {
+		return nil
+	}
 	return fmt.Errorf("%s: %w", operation, err)
 }
-
-var _ = time.Second
