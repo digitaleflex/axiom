@@ -39,8 +39,9 @@ func TestPostgreSQLPersistence(t *testing.T) {
 
 	repos := database.NewRepositories(db)
 	ids := testIDs()
+	defer cleanupTestData(t, ctx, db, ids.user)
 
-	if err := repos.Users.Create(ctx, ids.user,); err != nil {
+	if err := repos.Users.Create(ctx, ids.user); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 	if err := repos.GitHubConnections.Create(ctx, ids.connection, ids.user); err != nil {
@@ -98,6 +99,8 @@ func TestTransactionRollback(t *testing.T) {
 	}
 
 	id := "00000000-0000-0000-0000-000000000099"
+	_, _ = db.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, id)
+
 	err = database.Tx(ctx, db, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO users (id) VALUES ($1)`, id); err != nil {
 			return err
@@ -123,11 +126,18 @@ type testIDSet struct {
 
 func testIDs() testIDSet {
 	return testIDSet{
-		user:         "00000000-0000-0000-0000-000000000001",
-		connection:   "00000000-0000-0000-0000-000000000002",
-		repository:   "00000000-0000-0000-0000-000000000003",
-		application:  "00000000-0000-0000-0000-000000000004",
-		server:       "00000000-0000-0000-0000-000000000005",
-		deployment:   "00000000-0000-0000-0000-000000000006",
+		user:        "00000000-0000-0000-0000-000000000001",
+		connection:  "00000000-0000-0000-0000-000000000002",
+		repository:  "00000000-0000-0000-0000-000000000003",
+		application: "00000000-0000-0000-0000-000000000004",
+		server:      "00000000-0000-0000-0000-000000000005",
+		deployment:  "00000000-0000-0000-0000-000000000006",
+	}
+}
+
+func cleanupTestData(t *testing.T, ctx context.Context, db *sql.DB, userID string) {
+	t.Helper()
+	if _, err := db.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, userID); err != nil {
+		t.Logf("cleanup test data: %v", err)
 	}
 }
