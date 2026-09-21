@@ -1,0 +1,41 @@
+version: "0.1"
+tests:
+  - id: planner.valid_dag
+    area: planner
+    kind: positive
+  - id: planner.circular_dependency
+    area: planner
+    kind: negative
+  - id: routing.capability_match
+    area: routing
+    kind: positive
+  - id: routing.forbidden_role
+    area: routing
+    kind: negative
+  - id: context.minimum_required
+    area: context
+    kind: positive
+  - id: context.sensitive_access_denied
+    area: security
+    kind: negative
+  - id: artifact.valid_handoff
+    area: artifacts
+    kind: positive
+  - id: artifact.invalid_schema
+    area: artifacts
+    kind: negative
+  - id: gate.revision_required
+    area: gates
+    kind: negative
+  - id: approval.required
+    area: approvals
+    kind: pause
+  - id: recovery.retry_idempotent
+    area: recovery
+    kind: positive
+  - id: recovery.unknown_external_outcome
+    area: recovery
+    kind: reconciliation
+  - id: e2e.reference_workflow
+    area: e2e
+    kind: positive
