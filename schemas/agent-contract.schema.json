@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://axiom.dev/schemas/agent-contract.schema.json",
+  "title": "Axiom Agent Contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "id", "role", "capabilities", "inputs", "outputs", "permissions", "forbidden_responsibilities", "quality_gates", "runtime_limits"],
+  "properties": {
+    "version": {"type": "string", "pattern": "^0\\.1$"},
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "role": {"type": "string", "minLength": 1},
+    "description": {"type": "string"},
+    "capabilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "inputs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "outputs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["read", "write", "execute", "privileged", "approval_required"],
+      "properties": {
+        "read": {"type": "array", "items": {"type": "string"}},
+        "write": {"type": "array", "items": {"type": "string"}},
+        "execute": {"type": "array", "items": {"type": "string"}},
+        "privileged": {"type": "array", "items": {"type": "string"}},
+        "approval_required": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "forbidden_responsibilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "quality_gates": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "runtime_limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_execution_seconds": {"type": "integer", "minimum": 1},
+        "max_retries": {"type": "integer", "minimum": 0},
+        "network_access": {"type": "boolean"}
+      }
+    }
+  }
+}
