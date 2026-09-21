@@ -1,0 +1,12 @@
+version: "0.1"
+artifact:
+  id: example-artifact
+  type: architecture-specification
+  version: 1
+  producer: architect
+  consumers: []
+  project_id: example-project
+  task_id: example-task
+  dependencies: []
+  validation:
+    status: pending
