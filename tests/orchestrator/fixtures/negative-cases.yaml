@@ -1,0 +1,29 @@
+version: "0.1"
+cases:
+  - id: circular-dependency
+    input: [task-a, task-b]
+    expected: REJECTED
+    reason: circular dependency
+  - id: missing-capability
+    input: task-backend
+    agent_capabilities: [documentation]
+    expected: ROUTING_REJECTED
+  - id: forbidden-responsibility
+    task_role: infrastructure
+    agent_role: business-domain
+    expected: ROUTING_REJECTED
+  - id: invalid-artifact
+    artifact: architecture-v0-invalid
+    expected: HANDOFF_REJECTED
+  - id: failed-security-gate
+    gate: security
+    result: FAILED
+    expected: REVISION_REQUIRED
+  - id: missing-approval
+    operation: production-deployment
+    approval: PENDING
+    expected: WAITING_APPROVAL
+  - id: policy-denial
+    operation: privileged-operation
+    authorization: DENIED
+    expected: BLOCKED
