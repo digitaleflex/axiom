@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 type Server struct {
 	httpServer *http.Server
+	db         *sql.DB
 }
 
 type healthResponse struct {
@@ -19,7 +21,7 @@ type healthResponse struct {
 	Version string `json:"version"`
 }
 
-func New(cfg config.Config) *Server {
+func New(cfg config.Config, db *sql.DB) *Server {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
@@ -30,11 +32,21 @@ func New(cfg config.Config) *Server {
 		})
 	})
 
-	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
+		if cfg.Database.Required && db == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready", "reason": "database_unavailable"})
+			return
+		}
+		if db != nil {
+			if err := db.PingContext(r.Context()); err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready", "reason": "database_unavailable"})
+				return
+			}
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
 
-	return &Server{httpServer: &http.Server{
+	return &Server{db: db, httpServer: &http.Server{
 		Addr:              cfg.Host + ":" + cfg.Port,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
