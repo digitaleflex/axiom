@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -44,8 +45,8 @@ func (s *Server) ListenAndServe() error {
 	return s.httpServer.ListenAndServe()
 }
 
-func (s *Server) Shutdown() error {
-	return s.httpServer.Close()
+func (s *Server) ShutdownContext(ctx context.Context) error {
+	return s.httpServer.Shutdown(ctx)
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
