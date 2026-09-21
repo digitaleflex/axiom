@@ -14,6 +14,7 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/database"
 	"github.com/digitaleflex/axiom/services/engine/internal/httpserver"
 	"github.com/digitaleflex/axiom/services/engine/internal/logger"
+	"github.com/digitaleflex/axiom/services/engine/migrations"
 )
 
 func main() {
@@ -29,6 +30,16 @@ func main() {
 			_ = db.Close()
 		}
 	}()
+
+	if db != nil {
+		if err := migrations.Run(ctx, db); err != nil {
+			log.Error("database migrations failed", "error", err)
+			if cfg.Database.Required {
+				_ = db.Close()
+				db = nil
+			}
+		}
+	}
 
 	server := httpserver.New(cfg, db)
 
