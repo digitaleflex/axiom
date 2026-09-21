@@ -1,0 +1,12 @@
+version: "0.1"
+task:
+  id: example-task
+  project_id: example-project
+  role: architect
+  objective: "Example task"
+  inputs: []
+  expected_artifacts: []
+  dependencies: []
+  quality_gates: []
+  approval_required: false
+  status: pending
