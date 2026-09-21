@@ -1,0 +1,18 @@
+version: "0.1"
+project:
+  name: example-project
+  type: saas
+runtime:
+  backend: go
+  frontend: react
+  database: postgresql
+infrastructure:
+  docker: true
+  traefik: true
+  monitoring: true
+  backups: true
+
+deployment:
+  strategy: rolling
+
+# This manifest is a bootstrap example. The normative schema will be defined in M1.
