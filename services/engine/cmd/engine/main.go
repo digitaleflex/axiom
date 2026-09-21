@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os/signal"
 	"syscall"
@@ -22,8 +23,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	var dbClose func() error
-	var db = openDatabase(ctx, cfg, log, &dbClose)
+	db := openDatabase(ctx, cfg, log)
+	defer func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	}()
+
 	server := httpserver.New(cfg, db)
 
 	serverErr := make(chan error, 1)
@@ -46,16 +52,11 @@ func main() {
 			log.Error("axiom engine shutdown failed", "error", err)
 			return
 		}
-		if dbClose != nil {
-			if err := dbClose(); err != nil {
-				log.Error("database close failed", "error", err)
-			}
-		}
 		log.Info("axiom engine stopped")
 	}
 }
 
-func openDatabase(ctx context.Context, cfg config.Config, log interface{ Error(string, ...any) }) interfaceDatabase {
+func openDatabase(ctx context.Context, cfg config.Config, log interface{ Error(string, ...any) }) *sql.DB {
 	if cfg.Database.URL == "" {
 		if cfg.Database.Required {
 			log.Error("database is required but DATABASE_URL is not configured")
@@ -71,14 +72,7 @@ func openDatabase(ctx context.Context, cfg config.Config, log interface{ Error(s
 	})
 	if err != nil {
 		log.Error("database connection failed", "error", err)
-		if cfg.Database.Required {
-			return nil
-		}
 		return nil
 	}
 	return db
-}
-
-type interfaceDatabase interface {
-	PingContext(context.Context) error
 }
