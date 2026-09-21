@@ -1,25 +1,26 @@
 package database
 
-// The V0.1 persistence model intentionally follows the deployment domain:
-// User -> GitHubConnection -> Repository -> Application -> Deployment -> Server.
+import "time"
 
+// The V0.1 persistence model follows the deployment domain:
+// User -> GitHubConnection -> Repository -> Application -> Deployment -> Server.
 type User struct {
 	ID        string
-	CreatedAt string
+	CreatedAt time.Time
 }
 
 type GitHubConnection struct {
 	ID        string
 	UserID    string
-	CreatedAt string
+	CreatedAt time.Time
 }
 
 type Repository struct {
-	ID          string
+	ID           string
 	ConnectionID string
-	ExternalID  string
-	FullName    string
-	CloneURL    string
+	ExternalID   string
+	FullName     string
+	CloneURL     string
 }
 
 type Application struct {
@@ -30,10 +31,10 @@ type Application struct {
 }
 
 type Server struct {
-	ID        string
-	Name      string
-	Address   string
-	Status    string
+	ID      string
+	Name    string
+	Address string
+	Status  string
 }
 
 type Deployment struct {
