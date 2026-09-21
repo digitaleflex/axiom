@@ -19,7 +19,7 @@ type Engine struct {
 
 func (e Engine) ExecuteTask(run *domain.Run, task domain.Task, ctx orchcontext.Snapshot) (adapters.Result, error) {
 	if run == nil { return adapters.Result{}, fmt.Errorf("run is nil") }
-	if run.State != string(lifecycle.RUNNING) && run.State != string(lifecycle.READY) { return adapters.Result{}, fmt.Errorf("run %s is not executable in state %s", run.ID, run.State) }
+	if run.State != string(lifecycle.RunRunning) && run.State != string(lifecycle.RunReady) { return adapters.Result{}, fmt.Errorf("run %s is not executable in state %s", run.ID, run.State) }
 	if e.Executor == nil || e.Policy == nil { return adapters.Result{}, fmt.Errorf("engine dependencies are incomplete") }
 
 	agent, err := router.Match(router.Task{Role: task.Role, Capabilities: task.RequiredCapabilities}, e.Agents)
