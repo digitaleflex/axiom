@@ -3,6 +3,7 @@ package httpserver
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/config"
 )
@@ -35,7 +36,7 @@ func New(cfg config.Config) *Server {
 	return &Server{httpServer: &http.Server{
 		Addr:              cfg.Host + ":" + cfg.Port,
 		Handler:           mux,
-		ReadHeaderTimeout: 5 * 1e9,
+		ReadHeaderTimeout: 5 * time.Second,
 	}}
 }
 
