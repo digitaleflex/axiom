@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/digitaleflex/axiom/services/engine/internal/api"
 	"github.com/digitaleflex/axiom/services/engine/internal/config"
 )
 
@@ -26,9 +27,7 @@ func New(cfg config.Config, db *sql.DB) *Server {
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, healthResponse{
-			Status:  "ok",
-			Service: "axiom-engine",
-			Version: cfg.Version,
+			Status: "ok", Service: "axiom-engine", Version: cfg.Version,
 		})
 	})
 
@@ -46,20 +45,16 @@ func New(cfg config.Config, db *sql.DB) *Server {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
 
+	mux.Handle("/", api.New(db))
+
 	return &Server{db: db, httpServer: &http.Server{
-		Addr:              cfg.Host + ":" + cfg.Port,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
+		Addr: cfg.Host + ":" + cfg.Port, Handler: mux, ReadHeaderTimeout: 5 * time.Second,
 	}}
 }
 
-func (s *Server) ListenAndServe() error {
-	return s.httpServer.ListenAndServe()
-}
+func (s *Server) ListenAndServe() error { return s.httpServer.ListenAndServe() }
 
-func (s *Server) ShutdownContext(ctx context.Context) error {
-	return s.httpServer.Shutdown(ctx)
-}
+func (s *Server) ShutdownContext(ctx context.Context) error { return s.httpServer.Shutdown(ctx) }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
