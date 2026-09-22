@@ -8,10 +8,30 @@ import (
 	"time"
 )
 
-type API struct{ db *sql.DB }
+type deploymentRepo struct{ db *sql.DB }
+
+func (r deploymentRepo) Create(ctx context.Context, id, applicationID, serverID, environment string) error {
+	_, err := r.db.ExecContext(ctx, "INSERT INTO deployments (id, application_id, server_id, environment) VALUES ($1, $2, $3, $4)", id, applicationID, serverID, environment)
+	return err
+}
+func (r deploymentRepo) SetStatus(ctx context.Context, id, status string) error {
+	_, err := r.db.ExecContext(ctx, "UPDATE deployments SET status = $1 WHERE id = $2", status, id)
+	return err
+}
+func (r deploymentRepo) GetDomainRecord(ctx context.Context, id string) (deployment.Record, error) {
+	var v deployment.Record
+	err := r.db.QueryRowContext(ctx, "SELECT id, application_id, server_id, environment, status FROM deployments WHERE id = $1", id).
+		Scan(&v.ID, &v.ApplicationID, &v.ServerID, &v.Environment, &v.Status)
+	return v, err
+}
+
+type API struct {
+	db *sql.DB
+	deployments *deployment.Service
+}
 
 func New(db *sql.DB) http.Handler {
-	a := &API{db: db}
+	a := &API{db: db}\n\tif db != nil { a.deployments = deployment.NewService(deploymentRepo{db: db}, deployment.NewEventBus()) }
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/auth/me", a.me)
 	mux.HandleFunc("GET /api/v1/servers", a.servers)
@@ -76,9 +96,9 @@ func (a *API) createDeployment(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusServiceUnavailable, "DEPENDENCY_UNAVAILABLE", "database is unavailable", nil)
 		return
 	}
-	var input struct{ PlanID string `json:"planId"` }
+	var input struct { PlanID string `json:"planId"`; ServerID string `json:"serverId"`; Environment string `json:"environment"` }
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || strings.TrimSpace(input.PlanID) == "" {
-		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", "planId is required", nil)
+		if strings.TrimSpace(input.ServerID) == "" || strings.TrimSpace(input.Environment) == "" {\n\t\twriteAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", "serverId and environment are required", nil)\n\t\treturn\n\t}\n\tif a.deployments == nil {\n\t\twriteAPIError(w, http.StatusServiceUnavailable, "DEPENDENCY_UNAVAILABLE", "deployment service is unavailable", nil)\n\t\treturn\n\t}\n\tkey := r.Header.Get("Idempotency-Key")\n\trecord, err := a.deployments.CreateIdempotent(r.Context(), key, r.PathValue("applicationID"), input.ServerID, input.Environment, input.PlanID)\n\tif err != nil {\n\t\twriteAPIError(w, http.StatusInternalServerError, "DEPLOYMENT_CREATE_FAILED", err.Error(), nil)\n\t\treturn\n\t}\n\twriteJSON(w, http.StatusAccepted, map[string]any{"id": record.ID, "status": record.Status, "accepted": true, "planId": record.PlanID})\n\treturn\n\n\t/* legacy boundary */\n\t/*
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
