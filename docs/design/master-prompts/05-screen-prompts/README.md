@@ -1,44 +1,127 @@
 # Axiom Screen Generation Prompts
 
-These prompts are the **visual execution layer** of the Axiom design process.
+These prompts are the visual execution layer of the Axiom design process.
 
-Prompt 02 defines information architecture; it is intentionally textual. These prompts are where that architecture becomes **actual UI mockups**.
+**Prompt 02 remains an information-architecture deliverable. It is not a screen mockup generator.** The visual screen generation happens here, progressively, after the relevant upstream design artifacts are approved.
 
-## How to use
+## Screen universe
 
-Run one prompt at a time in Google Stitch or the selected visual design tool.
+### 01 — Public Marketing
+- Home
+- Features
+- How it works
+- Pricing
+- Documentation
+- Changelog
+- Status
+- Resources / Blog
+- Contact
+- About
 
-For every screen:
-1. Provide the approved Product UI Brief.
-2. Provide the approved UX & Information Architecture.
-3. Provide the approved Design DNA.
-4. Provide the approved visual direction.
-5. Paste the selected screen prompt.
-6. Require visual output, not prose.
-7. Export/save the generated screen as a named frame/artifact.
-8. Review it before moving to the next screen.
+### 02 — Authentication
+- Sign in
+- Sign up
+- Forgot password
+- Reset password
+- Email verification
+- Session/security entry states
 
-## Priority order
+### 03 — Onboarding
+- Welcome
+- Workspace setup
+- Connect GitHub
+- Repository selection
+- Server setup
+- First deployment
+- Onboarding completion
 
-01 Dashboard
-02 GitHub Connection
-03 Repository List
-04 Repository Detail
-05 Repository Analysis
-06 Application Profile
-07 Server Selection
-08 Deployment Configuration
-09 Deployment Plan
-10 Deployment Progress
-11 Deployment Success
-12 Deployment Failure
-13 Application Overview
-14 Application Deployments
-15 Application Logs
-16 Application Metrics
-17 Application Domains
-18 Server Overview
-19 Server Details
-20 Settings
+### 04 — Cloud Console
+- Dashboard
+- GitHub Connection
+- Repository List
+- Repository Detail
+- Repository Analysis
+- Application Profile
+- Server Selection
+- Deployment Configuration
+- Deployment Plan
+- Deployment Progress
+- Deployment Success
+- Deployment Failure
 
-The first ten screens establish the core GitHub → LIVE journey. The remaining screens establish operational depth.
+### 05 — Application Operations
+- Application Overview
+- Application Deployments
+- Application Logs
+- Application Metrics
+- Application Domains
+- Environment switching
+- Rollback
+- Operational failure/recovery states
+
+### 06 — Infrastructure
+- Server Overview
+- Server Details
+- Agent health
+- Resources
+- Capabilities
+- Managed runtimes
+- Networking
+- Infrastructure failure/recovery states
+
+### 07 — Workspace & Account
+- Profile
+- Workspace
+- Members
+- Roles
+- Security
+- Sessions
+- API / Access
+- Preferences
+
+### 08 — Billing
+- Pricing
+- Plan selection
+- Checkout
+- Payment method
+- Subscription
+- Usage
+- Invoices
+- Billing history
+- Limits
+- Payment-required states
+
+### 09 — System States
+- 404
+- 403
+- 500
+- Maintenance
+- Service unavailable
+- Offline
+- Degraded
+- GitHub disconnected
+- No server available
+- Quota exceeded
+- Recovery states
+
+## Current execution status
+
+The existing 20 core screen prompts are preserved while the current design sequence is being completed. They will be progressively organized into the groups above after the active design stage is finished.
+
+Do **not** generate all groups at once.
+
+The intended order is:
+
+01 Product UI Brief
+→ 02 UX & Information Architecture
+→ 03 Design DNA
+→ 04 Visual Direction
+→ 05 Screen System
+→ individual screen groups
+→ 06 Design Validation
+→ 07 Design Handoff
+→ 08 Frontend
+→ 09 Visual QA
+→ 10 Final Design System
+
+Each generated screen must be a visual UI artifact and must remain consistent with the approved upstream sources.
