@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-//go:embed 001_initial_schema.sql
+//go:embed *.sql
 var files embed.FS
 
 func Run(ctx context.Context, db *sql.DB) error {
