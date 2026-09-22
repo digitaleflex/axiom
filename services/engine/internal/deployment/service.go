@@ -21,7 +21,7 @@ type Record struct {
 type Repository interface {
 	Create(ctx context.Context, id, applicationID, serverID, environment string) error
 	SetStatus(ctx context.Context, id, status string) error
-	Get(ctx context.Context, id string) (Record, error)
+	GetDomainRecord(ctx context.Context, id string) (Record, error)
 }
 
 type Service struct {
@@ -55,7 +55,7 @@ func (s *Service) Create(ctx context.Context, applicationID, serverID, environme
 func (s *Service) Transition(ctx context.Context, id string, to State) (Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	current, err := s.repo.Get(ctx, id)
+	current, err := s.repo.GetDomainRecord(ctx, id)
 	if err != nil {
 		return Record{}, err
 	}
