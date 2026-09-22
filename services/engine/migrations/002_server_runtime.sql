@@ -1,0 +1,10 @@
+ALTER TABLE servers
+    ADD COLUMN IF NOT EXISTS agent_version TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS cpu_count INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS memory_mb INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS disk_free_mb INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_servers_status ON servers(status);
+CREATE INDEX IF NOT EXISTS idx_servers_last_seen_at ON servers(last_seen_at);
