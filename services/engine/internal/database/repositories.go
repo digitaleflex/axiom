@@ -87,3 +87,14 @@ func wrap(operation string, err error) error {
 	}
 	return fmt.Errorf("%s: %w", operation, err)
 }
+
+
+// GetRecord adapts the persistence model to the deployment domain without
+// exposing database concerns to the domain service.
+func (r DeploymentRepository) GetRecord(ctx context.Context, id string) (string, string, string, string, error) {
+	v, err := r.Get(ctx, id)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	return v.ID, v.ApplicationID, v.ServerID, v.Environment, nil
+}
