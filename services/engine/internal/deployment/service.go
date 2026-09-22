@@ -2,11 +2,11 @@ package deployment
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 type Record struct {
@@ -25,9 +25,10 @@ type Repository interface {
 }
 
 type Service struct {
-	repo Repository
-	bus  *EventBus
-	mu   sync.Mutex
+	repo       Repository
+	bus        *EventBus
+	mu         sync.Mutex
+	idempotent map[string]Record
 }
 
 func NewService(repo Repository, bus *EventBus) *Service {
@@ -39,14 +40,32 @@ func NewService(repo Repository, bus *EventBus) *Service {
 
 func (s *Service) Events() *EventBus { return s.bus }
 
-func (s *Service) Create(ctx context.Context, applicationID, serverID, environment, planID string) (Record, error) {\n\treturn s.CreateIdempotent(ctx, "", applicationID, serverID, environment, planID)\n}\n\nfunc (s *Service) CreateIdempotent(ctx context.Context, key, applicationID, serverID, environment, planID string) (Record, error) {
+func (s *Service) Create(ctx context.Context, applicationID, serverID, environment, planID string) (Record, error) {
+	return s.CreateIdempotent(ctx, "", applicationID, serverID, environment, planID)
+}
+
+func (s *Service) CreateIdempotent(ctx context.Context, key, applicationID, serverID, environment, planID string) (Record, error) {
 	if applicationID == "" || serverID == "" || environment == "" || planID == "" {
 		return Record{}, fmt.Errorf("applicationID, serverID, environment and planID are required")
 	}
+	if key != "" {
+		s.mu.Lock()
+		if existing, ok := s.idempotent[key]; ok {
+			s.mu.Unlock()
+			return existing, nil
+		}
+		s.mu.Unlock()
+	}
+
 	id := "dep_" + randomID()
 	record := Record{ID: id, ApplicationID: applicationID, ServerID: serverID, Environment: environment, Status: StatePending, PlanID: planID}
 	if err := s.repo.Create(ctx, id, applicationID, serverID, environment); err != nil {
 		return Record{}, err
+	}
+	if key != "" {
+		s.mu.Lock()
+		s.idempotent[key] = record
+		s.mu.Unlock()
 	}
 	s.publish(record, "deployment.created", map[string]any{"planId": planID, "status": StatePending})
 	return record, nil
@@ -62,6 +81,7 @@ func (s *Service) Transition(ctx context.Context, id string, to State) (Record, 
 	if err := Transition(current.Status, to); err != nil {
 		return current, err
 	}
+	from := current.Status
 	if err := s.repo.SetStatus(ctx, id, string(to)); err != nil {
 		return current, err
 	}
@@ -73,4 +93,11 @@ func (s *Service) Transition(ctx context.Context, id string, to State) (Record, 
 func (s *Service) publish(record Record, typ string, data any) {
 	s.bus.Publish(Event{ID: "evt_" + randomID(), Type: typ, Version: 1, DeploymentID: record.ID, OccurredAt: time.Now().UTC(), Data: data})
 }
-\nfunc randomID() string {\n\tb := make([]byte, 12)\n\tif _, err := rand.Read(b); err != nil {\n\t\treturn fmt.Sprintf("%d", time.Now().UnixNano())\n\t}\n\treturn hex.EncodeToString(b)\n}\n
+
+func randomID() string {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
+}
