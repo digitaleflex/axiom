@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDeploymentStream(t *testing.T) {
@@ -14,10 +16,17 @@ func TestDeploymentStream(t *testing.T) {
 	req = req.WithContext(ctx)
 	rr := httptest.NewRecorder()
 	done := make(chan struct{})
-	go func(){ New(nil).ServeHTTP(rr, req); close(done) }()
+	go func() {
+		New(nil).ServeHTTP(rr, req)
+		close(done)
+	}()
 	<-time.After(10 * time.Millisecond)
 	cancel()
 	<-done
-	if rr.Code != http.StatusOK { t.Fatalf("expected 200, got %d", rr.Code) }
-	if !strings.Contains(rr.Body.String(), "deployment.stream.connected") { t.Fatalf("expected bootstrap event") }
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "deployment.stream.connected") {
+		t.Fatalf("expected bootstrap event")
+	}
 }
