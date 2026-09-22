@@ -34,12 +34,12 @@ func NewService(repo Repository, bus *EventBus) *Service {
 	if bus == nil {
 		bus = NewEventBus()
 	}
-	return &Service{repo: repo, bus: bus}
+	return &Service{repo: repo, bus: bus, idempotent: make(map[string]Record)}
 }
 
 func (s *Service) Events() *EventBus { return s.bus }
 
-func (s *Service) Create(ctx context.Context, applicationID, serverID, environment, planID string) (Record, error) {
+func (s *Service) Create(ctx context.Context, applicationID, serverID, environment, planID string) (Record, error) {\n\treturn s.CreateIdempotent(ctx, "", applicationID, serverID, environment, planID)\n}\n\nfunc (s *Service) CreateIdempotent(ctx context.Context, key, applicationID, serverID, environment, planID string) (Record, error) {
 	if applicationID == "" || serverID == "" || environment == "" || planID == "" {
 		return Record{}, fmt.Errorf("applicationID, serverID, environment and planID are required")
 	}
@@ -66,7 +66,7 @@ func (s *Service) Transition(ctx context.Context, id string, to State) (Record, 
 		return current, err
 	}
 	current.Status = to
-	s.publish(current, "deployment.state.changed", map[string]any{"from": current.Status, "to": to})
+	s.publish(current, "deployment.state.changed", map[string]any{"from": from, "to": to})
 	return current, nil
 }
 
