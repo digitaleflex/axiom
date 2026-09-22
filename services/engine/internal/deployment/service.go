@@ -43,7 +43,7 @@ func (s *Service) Create(ctx context.Context, applicationID, serverID, environme
 	if applicationID == "" || serverID == "" || environment == "" || planID == "" {
 		return Record{}, fmt.Errorf("applicationID, serverID, environment and planID are required")
 	}
-	id := "dep_" + uuid.NewString()
+	id := "dep_" + randomID()
 	record := Record{ID: id, ApplicationID: applicationID, ServerID: serverID, Environment: environment, Status: StatePending, PlanID: planID}
 	if err := s.repo.Create(ctx, id, applicationID, serverID, environment); err != nil {
 		return Record{}, err
@@ -71,5 +71,6 @@ func (s *Service) Transition(ctx context.Context, id string, to State) (Record, 
 }
 
 func (s *Service) publish(record Record, typ string, data any) {
-	s.bus.Publish(Event{ID: "evt_" + uuid.NewString(), Type: typ, Version: 1, DeploymentID: record.ID, OccurredAt: time.Now().UTC(), Data: data})
+	s.bus.Publish(Event{ID: "evt_" + randomID(), Type: typ, Version: 1, DeploymentID: record.ID, OccurredAt: time.Now().UTC(), Data: data})
 }
+\nfunc randomID() string {\n\tb := make([]byte, 12)\n\tif _, err := rand.Read(b); err != nil {\n\t\treturn fmt.Sprintf("%d", time.Now().UnixNano())\n\t}\n\treturn hex.EncodeToString(b)\n}\n
