@@ -1,22 +1,53 @@
-# Axiom Expert Agent Framework
+# Axiom Agent Operating System
 
-The expert framework defines specialized responsibilities that collaborate through explicit contracts and artifacts.
+Axiom uses specialized expert roles plus GitHub Copilot custom agents to execute bounded engineering work through issues and pull requests.
 
 ## Core documents
 
-- [Roles](./roles.md) — ownership and responsibility boundaries.
+- [Roles](./roles.md) — responsibilities and ownership boundaries.
 - [Capabilities](./capabilities.md) — bounded actions available to experts.
 - [Context](./context.md) — context and memory boundaries.
 - [Tools](./tools.md) — tool permission model.
 - [Quality Gates](./quality-gates.md) — validation and approval model.
 - [Expert Specifications](./specs/README.md) — reference expert contracts.
+- [Lifecycle](./lifecycle.md) — DRAFT → DONE execution lifecycle.
+- [Assignment](./assignment.md) — routing issues to the appropriate agent.
+- [Handoff](./handoff.md) — required completion evidence.
 
-## Execution principle
+## GitHub-native execution
 
-Experts do not directly redefine the global workflow. The orchestrator selects an expert according to declared role, capability, dependencies, and quality gates.
+Repository-level custom agents live under `.github/agents/`. GitHub Copilot cloud agent can use these profiles when starting a task or assigning an agent to an issue.
 
-Every meaningful handoff produces a typed artifact. Sensitive operations remain subject to authorization and, where required, human approval.
+Axiom adds governance around that capability:
 
-## v0.1 objective
+```
+Architecture / Contracts
+        ↓
+GitHub Issue
+        ↓
+Agent Task Specification
+        ↓
+READY gate
+        ↓
+GitHub Custom Agent
+        ↓
+Owned files
+        ↓
+Pull Request
+        ↓
+Scope + Tests + Security
+        ↓
+Architecture Review
+        ↓
+Integration
+        ↓
+DONE
+```
 
-The framework must be implementable without coupling expert definitions to a specific business project or AI provider.
+## Operating principle
+
+The GitHub agent is the implementation executor. Axiom's architecture, issue contracts, ownership map, readiness validator, CI, and human review remain the governance layer.
+
+Agents do not redefine global architecture implicitly.
+
+Every meaningful handoff produces evidence. Sensitive operations remain subject to explicit authorization and security controls.
