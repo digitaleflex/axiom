@@ -1,16 +1,8 @@
 package planner
 
-type ApplicationProfile struct {
-	Language         string
-	Framework        string
-	PackageManager   string
-	BuildCommand     string
-	StartCommand     string
-	Port             int
-	ContainerStrategy string
-	Services         []string
-	Confidence       float64
-}
+import "github.com/digitaleflex/axiom/services/engine/internal/profile"
+
+type ApplicationProfile = profile.ApplicationProfile
 
 type ServerProfile struct {
 	ID           string
@@ -22,22 +14,22 @@ type ServerProfile struct {
 }
 
 type Plan struct {
-	ID                    string
+	ID                       string
 	ApplicationProfileVersion int
-	ServerID              string
-	Strategy              string
-	Build                 BuildPlan
-	Runtime               RuntimePlan
-	Network               NetworkPlan
-	Health                HealthPlan
-	Rollback              RollbackPlan
-	Steps                 []Step
+	ServerID                 string
+	Strategy                 string
+	Build                    BuildPlan
+	Runtime                  RuntimePlan
+	Network                  NetworkPlan
+	Health                   HealthPlan
+	Rollback                 RollbackPlan
+	Steps                    []Step
 }
 
 type BuildPlan struct {
-	Strategy      string
+	Strategy       string
 	PackageManager string
-	Command       string
+	Command        string
 }
 
 type RuntimePlan struct {
@@ -54,8 +46,8 @@ type NetworkPlan struct {
 }
 
 type HealthPlan struct {
-	Type     string
-	Path     string
+	Type           string
+	Path           string
 	TimeoutSeconds int
 }
 
@@ -64,6 +56,6 @@ type RollbackPlan struct {
 }
 
 type Step struct {
-	Name string
+	Name  string
 	Order int
 }
