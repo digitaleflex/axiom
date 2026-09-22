@@ -1,0 +1,57 @@
+version: 1
+
+workflow:
+  states:
+    - DRAFT
+    - READY
+    - IN_PROGRESS
+    - REVIEW
+    - INTEGRATION
+    - DONE
+    - BLOCKED
+    - REJECTED
+    - CANCELLED
+
+  terminal:
+    - DONE
+    - CANCELLED
+
+readiness:
+  required_sections:
+    - Objective
+    - Dependencies
+    - Collision Boundary
+    - Contracts
+    - Implementation Requirements
+    - Test Strategy
+    - Acceptance Criteria
+    - Definition of Done
+    - Handoff
+
+  required_metadata:
+    - agent
+    - priority
+    - deadline
+
+  fail_closed: true
+
+ownership:
+  require_owned_paths: true
+  require_forbidden_paths: true
+  reject_overlapping_active_ownership: true
+
+execution:
+  require_dependencies_ready: true
+  require_contracts_identified: true
+  prohibit_unscoped_changes: true
+  prohibit_unverified_test_claims: true
+
+review:
+  require_acceptance_evidence: true
+  require_scope_check: true
+  require_security_check: true
+
+integration:
+  require_clean_integration: true
+  require_relevant_tests: true
+  require_ownership_revalidation: true
