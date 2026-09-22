@@ -2,8 +2,6 @@ package database
 
 import "time"
 
-// The V0.1 persistence model follows the deployment domain:
-// User -> GitHubConnection -> Repository -> Application -> Deployment -> Server.
 type User struct {
 	ID        string
 	CreatedAt time.Time
@@ -31,10 +29,16 @@ type Application struct {
 }
 
 type Server struct {
-	ID      string
-	Name    string
-	Address string
-	Status  string
+	ID           string
+	Name         string
+	Address      string
+	Status       string
+	AgentVersion string
+	Capabilities []string
+	CPUCount     int
+	MemoryMB     int
+	DiskFreeMB   int
+	LastSeenAt   time.Time
 }
 
 type Deployment struct {
