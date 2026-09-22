@@ -4,7 +4,7 @@ import "testing"
 
 func TestValidDeploymentTransitions(t *testing.T) {
 	tests := [][2]State{
-		{StatePending, StatePlanning},
+		{StatePending, StateAnalyzing},\n\t\t{StateAnalyzing, StatePlanning},
 		{StatePlanning, StateBuilding},
 		{StateBuilding, StateDeploying},
 		{StateDeploying, StateVerifying},
