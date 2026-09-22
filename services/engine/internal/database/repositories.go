@@ -98,3 +98,12 @@ func (r DeploymentRepository) GetRecord(ctx context.Context, id string) (string,
 	}
 	return v.ID, v.ApplicationID, v.ServerID, v.Environment, nil
 }
+
+
+func (r DeploymentRepository) GetDomainRecord(ctx context.Context, id string) (deployment.Record, error) {
+	v, err := r.Get(ctx, id)
+	if err != nil {
+		return deployment.Record{}, err
+	}
+	return deployment.Record{ID: v.ID, ApplicationID: v.ApplicationID, ServerID: v.ServerID, Environment: v.Environment, Status: deployment.State(v.Status)}, nil
+}
