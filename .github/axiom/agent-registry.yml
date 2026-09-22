@@ -1,0 +1,41 @@
+version: 1
+
+agents:
+  architecture:
+    profile: .github/agents/architecture.agent.md
+    domains: [architecture, contracts, adr, boundaries]
+  engine:
+    profile: .github/agents/engine.agent.md
+    domains: [go, engine, orchestration]
+  deployment:
+    profile: .github/agents/deployment.agent.md
+    domains: [github, analyzer, profile, planner, build]
+  runtime:
+    profile: .github/agents/runtime.agent.md
+    domains: [agent, docker, traefik, health, logs, runtime]
+  database:
+    profile: .github/agents/database.agent.md
+    domains: [postgresql, migrations, persistence, idempotency]
+  security:
+    profile: .github/agents/security.agent.md
+    domains: [authentication, authorization, secrets, threat-model]
+  frontend:
+    profile: .github/agents/frontend.agent.md
+    domains: [cloud-console, ui, ux]
+  qa:
+    profile: .github/agents/qa.agent.md
+    domains: [tests, e2e, regression, release]
+
+assignment:
+  require_ready_issue: true
+  require_explicit_agent: true
+  reject_unknown_agent: true
+  require_owned_paths: true
+  require_dependency_resolution: true
+  require_pr_for_review: true
+
+execution:
+  default_delivery: pull_request
+  prohibit_unscoped_changes: true
+  prohibit_unverified_test_claims: true
+  preserve_security_boundaries: true
