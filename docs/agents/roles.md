@@ -1,48 +1,49 @@
 # Axiom Expert Roles
 
-Axiom uses specialized experts with explicit authority boundaries. The goal is specialization without duplicated ownership or uncontrolled autonomy.
+Axiom combines domain experts with GitHub custom agents. The role defines responsibility; the GitHub agent profile defines how that role is executed.
 
-| Expert | Primary responsibility | Must not own |
+| Role | Primary responsibility | Typical GitHub agent |
 |---|---|---|
-| Business Domain | Requirements, domain rules, workflows | Infrastructure implementation |
-| Architect | System architecture, boundaries, ADRs | Business policy |
-| Backend | APIs, services, application logic | Infrastructure policy |
-| Frontend | UI, client behavior, accessibility | Server infrastructure |
-| Database | Schema, migrations, indexes, data integrity | Product requirements |
-| Security | Security controls, threat model, authorization constraints | Business priorities |
-| QA | Validation strategy, tests, regression, acceptance evidence | Production authority |
-| DevOps | CI/CD, delivery workflow, release automation | Domain rules |
-| Infrastructure | Runtime infrastructure, networking, deployment environment | Business logic |
-| Observability | Logs, metrics, traces, health, alerting | Product semantics |
-| Documentation | Technical and operational documentation | Architectural authority |
+| Business Domain | Requirements, domain rules, workflows | architecture |
+| Architect | System architecture, boundaries, ADRs | architecture |
+| Backend / Engine | APIs, services, Go Engine | engine |
+| Deployment | GitHub integration, analyzer, profiles, planner | deployment |
+| Runtime / Infrastructure | Docker, Traefik, runtime lifecycle | runtime |
+| Frontend | Cloud Console, deployment UX | frontend |
+| Database | Schema, migrations, persistence | database |
+| Security | Auth, secrets, authorization, threat model | security |
+| QA | Tests, regression, E2E, release evidence | qa |
 
-## Coordination model
+## GitHub agent boundaries
 
-```text
-Business Domain
-      ↓
-Business Expert
-      ↓
-Architect
-      ↓
-Backend / Frontend / Database
-      ↓
-Security
-      ↓
-QA
-      ↓
-DevOps / Infrastructure
-      ↓
-Runtime Agent
-```
+### Architecture Agent
+Owns architecture contracts, ADRs and cross-component coherence. It must not silently implement unrelated features.
 
-The Orchestrator coordinates this workflow. It does not replace the responsibility of an expert.
+### Engine Agent
+Owns Go Engine composition, orchestration primitives and deployment-domain integration.
 
-## Ownership rules
+### Deployment Agent
+Owns GitHub integration, repository analysis, application profiles, deployment plans and build orchestration.
+
+### Runtime Agent
+Owns runtime execution, Docker, Traefik, health, logs and agent-side lifecycle. It must preserve host ownership boundaries and must not introduce arbitrary host command execution.
+
+### Frontend Agent
+Owns the Cloud Console and frontend integration with documented backend contracts.
+
+### Database Agent
+Owns PostgreSQL schema, migrations, indexes, persistence and durable idempotency.
+
+### Security Agent
+Owns authentication, authorization, credentials, secrets and abuse controls. Security-sensitive work is fail-closed.
+
+### QA Agent
+Owns integration tests, E2E tests, regression suites and release evidence.
+
+## Coordination rules
 
 - Every decision has an accountable role.
-- Cross-domain decisions require explicit handoff or orchestration.
-- Business requirements are authoritative for domain behavior.
-- Security constraints remain enforceable regardless of the requesting role.
-- Infrastructure experts may reject technically unsafe deployment requirements.
-- Experts cannot silently expand their authority through tool access.
+- Every implementation task has an explicit owned path.
+- Cross-domain changes require explicit integration.
+- Security constraints apply regardless of which agent requested the change.
+- An agent cannot expand its authority merely because it has tool access.
