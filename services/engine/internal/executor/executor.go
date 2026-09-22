@@ -41,26 +41,24 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 		return Result{}, err
 	}
 
-	if err := e.runStep(ctx, record, "BUILD", func() error {
-		return nil
-	}); err != nil {
-		return e.fail(ctx, req.DeploymentID, err)
-	}
-
 	record, err = e.deployments.Transition(ctx, req.DeploymentID, deployment.StateBuilding)
 	if err != nil {
 		return Result{}, err
 	}
 
-	build, err := e.builder.Build(ctx, BuildRequest{
-		DeploymentID: req.DeploymentID,
-		Repository: req.Repository,
-		Ref: req.Ref,
-		WorkDir: req.WorkDir,
-		Image: req.Image,
-		Command: req.Plan.Build.Command,
-	})
-	if err != nil {
+	var build BuildResult
+	if err := e.runStep(ctx, record, "BUILD", func() error {
+		var buildErr error
+		build, buildErr = e.builder.Build(ctx, BuildRequest{
+			DeploymentID: req.DeploymentID,
+			Repository: req.Repository,
+			Ref: req.Ref,
+			WorkDir: req.WorkDir,
+			Image: req.Image,
+			Command: req.Plan.Build.Command,
+		})
+		return buildErr
+	}); err != nil {
 		return e.fail(ctx, req.DeploymentID, fmt.Errorf("build: %w", err))
 	}
 
