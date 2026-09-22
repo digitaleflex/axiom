@@ -1,29 +1,15 @@
 # Axiom Visual Screen Prompt
 
-Use the approved Axiom Product UI Brief, UX & Information Architecture, Design DNA, and visual direction as immutable references.
+Use the approved Axiom Product UI Brief, UX & Information Architecture, Design DNA and visual direction.
 
-## Non-negotiable output
+**Generate an actual high-fidelity UI mockup. Do not return documentation, an essay, a wireframe description, or a component specification. The visible interface is the deliverable.**
 
-Generate an **actual high-fidelity UI mockup** of the requested Axiom screen. Do not answer with documentation, a UX essay, a wireframe description, a component inventory, or a textual specification. The result must be a visible product interface suitable for a desktop developer/DevOps SaaS.
-
-Keep the Axiom global shell coherent: navigation, environment context, typography, spacing, status semantics and interaction language must match the approved system.
-
-Axiom's core pipeline is:
-GitHub → Repository → Analysis → Stack Detection → Application Profile → Deployment Plan → Build → Runtime → Networking → Domain / SSL → Health → LIVE.
-
-Use realistic synthetic data. Use monospace treatment for technical identifiers and logs where relevant. Use semantic states consistently: Emerald Live, Amber Building/Probing, Crimson Failure/Crash, Blue Preview/Queued, Slate Superseded/Inactive.
-
-Do not imitate Vercel, Linear, Railway, Render, AWS or another existing product.
+Keep Axiom's global shell and semantic status system coherent: Emerald=Live, Amber=Building/Probing, Crimson=Failure/Crash, Blue=Preview/Queued, Slate=Superseded/Inactive. Use realistic synthetic data and developer/DevOps-grade information density. Use monospace for technical identifiers where relevant. Do not imitate another product.
 
 ## Requested screen
 
 
-## Screen-specific direction
+### Deployment Success
+Successful deployment: LIVE status, production URL, deployment duration, commit SHA, runtime/container identity, health result, server and key steps. Actions: Open Application, Logs, Rollback.
 
-11 — Deployment Success
-
-Create the successful deployment screen after verification. Show LIVE status, production URL/domain, deployment duration, commit SHA, runtime/container identity, health result, deployed server, key deployment steps, and actions to Open Application, View Logs and Rollback. Make successful production state unmistakable.
-
-## Final instruction
-
-Render the interface now. The primary deliverable is the visual screen itself. Do not replace the mockup with a written explanation.
+Render the screen now. The primary output must be the visual UI, not prose.
