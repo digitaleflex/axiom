@@ -1,6 +1,6 @@
 # Axiom Screen Generation Prompts
 
-These prompts are the visual execution layer of the Axiom design process.
+These prompts are the **visual execution layer** of the Axiom design process.
 
 Prompt 02 defines information architecture; it is intentionally textual. These prompts are where that architecture becomes **actual UI mockups**.
 
@@ -20,7 +20,6 @@ For every screen:
 
 ## Priority order
 
-Start with:
 01 Dashboard
 02 GitHub Connection
 03 Repository List
