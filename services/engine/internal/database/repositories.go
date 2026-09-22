@@ -3,7 +3,12 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"time"
+
+	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
+	"github.com/digitaleflex/axiom/services/engine/internal/server"
 )
 
 type UserRepository struct{ db *sql.DB }
@@ -24,12 +29,12 @@ type Repositories struct {
 
 func NewRepositories(db *sql.DB) Repositories {
 	return Repositories{
-		Users:             UserRepository{db: db},
+		Users: UserRepository{db: db},
 		GitHubConnections: GitHubConnectionRepository{db: db},
-		Repositories:      RepositoryRepository{db: db},
-		Applications:      ApplicationRepository{db: db},
-		Servers:           ServerRepository{db: db},
-		Deployments:       DeploymentRepository{db: db},
+		Repositories: RepositoryRepository{db: db},
+		Applications: ApplicationRepository{db: db},
+		Servers: ServerRepository{db: db},
+		Deployments: DeploymentRepository{db: db},
 	}
 }
 
@@ -64,6 +69,43 @@ func (r ServerRepository) Create(ctx context.Context, id, name, address string) 
 	return wrap("create server", err)
 }
 
+func (r ServerRepository) Get(ctx context.Context, id string) (server.Record, error) {
+	var v server.Record
+	var rawCapabilities []byte
+	var lastSeen sql.NullTime
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, name, address, status, agent_version, capabilities, cpu_count, memory_mb, disk_free_mb, last_seen_at
+		FROM servers WHERE id = $1
+	`, id).Scan(
+		&v.ID, &v.Name, &v.Address, &v.Status, &v.AgentVersion, &rawCapabilities,
+		&v.CPUCount, &v.MemoryMB, &v.DiskFreeMB, &lastSeen,
+	)
+	if err != nil {
+		return server.Record{}, wrap("get server", err)
+	}
+	if err := json.Unmarshal(rawCapabilities, &v.Capabilities); err != nil {
+		return server.Record{}, wrap("decode server capabilities", err)
+	}
+	if lastSeen.Valid {
+		v.LastSeenAt = lastSeen.Time.UTC().Format(time.RFC3339)
+	}
+	return v, nil
+}
+
+func (r ServerRepository) UpdateHealth(ctx context.Context, id string, health server.Health) error {
+	raw, err := json.Marshal(health.Capabilities)
+	if err != nil {
+		return wrap("encode server capabilities", err)
+	}
+	_, err = r.db.ExecContext(ctx, `
+		UPDATE servers
+		SET status = $1, agent_version = $2, capabilities = $3, cpu_count = $4,
+		    memory_mb = $5, disk_free_mb = $6, last_seen_at = $7
+		WHERE id = $8
+	`, health.Status, health.AgentVersion, raw, health.CPUCount, health.MemoryMB, health.DiskFreeMB, health.LastSeenAt, id)
+	return wrap("update server health", err)
+}
+
 func (r DeploymentRepository) Create(ctx context.Context, id, applicationID, serverID, environment string) error {
 	_, err := r.db.ExecContext(ctx, `INSERT INTO deployments (id, application_id, server_id, environment) VALUES ($1, $2, $3, $4)`, id, applicationID, serverID, environment)
 	return wrap("create deployment", err)
@@ -81,29 +123,17 @@ func (r DeploymentRepository) Get(ctx context.Context, id string) (Deployment, e
 	return v, wrap("get deployment", err)
 }
 
-func wrap(operation string, err error) error {
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("%s: %w", operation, err)
-}
-
-
-// GetRecord adapts the persistence model to the deployment domain without
-// exposing database concerns to the domain service.
-func (r DeploymentRepository) GetRecord(ctx context.Context, id string) (string, string, string, string, error) {
-	v, err := r.Get(ctx, id)
-	if err != nil {
-		return "", "", "", "", err
-	}
-	return v.ID, v.ApplicationID, v.ServerID, v.Environment, nil
-}
-
-
 func (r DeploymentRepository) GetDomainRecord(ctx context.Context, id string) (deployment.Record, error) {
 	v, err := r.Get(ctx, id)
 	if err != nil {
 		return deployment.Record{}, err
 	}
 	return deployment.Record{ID: v.ID, ApplicationID: v.ApplicationID, ServerID: v.ServerID, Environment: v.Environment, Status: deployment.State(v.Status)}, nil
+}
+
+func wrap(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
