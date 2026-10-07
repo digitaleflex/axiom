@@ -1,89 +1,39 @@
+// Command engine runs the Axiom Engine (control plane).
 package main
 
 import (
 	"context"
-	"database/sql"
-	"errors"
+	"fmt"
+	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
-
+	"github.com/digitaleflex/axiom/services/engine/internal/bootstrap"
 	"github.com/digitaleflex/axiom/services/engine/internal/config"
-	"github.com/digitaleflex/axiom/services/engine/internal/database"
-	"github.com/digitaleflex/axiom/services/engine/internal/httpserver"
 	"github.com/digitaleflex/axiom/services/engine/internal/logger"
-	"github.com/digitaleflex/axiom/services/engine/migrations"
 )
 
 func main() {
-	cfg := config.Load()
-	log := logger.New()
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "axiom engine:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
+	log := logger.New(cfg.LogLevel)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	db := openDatabase(ctx, cfg, log)
-	defer func() {
-		if db != nil {
-			_ = db.Close()
-		}
-	}()
-
-	if db != nil {
-		if err := migrations.Run(ctx, db); err != nil {
-			log.Error("database migrations failed", "error", err)
-			if cfg.Database.Required {
-				_ = db.Close()
-				db = nil
-			}
-		}
-	}
-
-	server := httpserver.New(cfg, db)
-
-	serverErr := make(chan error, 1)
-	go func() {
-		serverErr <- server.ListenAndServe()
-	}()
-
-	log.Info("axiom engine started", "host", cfg.Host, "port", cfg.Port, "version", cfg.Version, "database", db != nil)
-
-	select {
-	case err := <-serverErr:
-		if !errors.Is(err, context.Canceled) {
-			log.Error("axiom engine stopped unexpectedly", "error", err)
-		}
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		if err := server.ShutdownContext(shutdownCtx); err != nil {
-			log.Error("axiom engine shutdown failed", "error", err)
-			return
-		}
-		log.Info("axiom engine stopped")
-	}
-}
-
-func openDatabase(ctx context.Context, cfg config.Config, log interface{ Error(string, ...any) }) *sql.DB {
-	if cfg.Database.URL == "" {
-		if cfg.Database.Required {
-			log.Error("database is required but DATABASE_URL is not configured")
-		}
-		return nil
-	}
-
-	db, err := database.Open(ctx, "pgx", database.Config{
-		URL:             cfg.Database.URL,
-		MaxOpenConns:    cfg.Database.MaxOpenConns,
-		MaxIdleConns:    cfg.Database.MaxIdleConns,
-		ConnMaxLifetime: cfg.Database.ConnMaxLifetime,
-	})
+	app, err := bootstrap.New(ctx, cfg, log)
 	if err != nil {
-		log.Error("database connection failed", "error", err)
-		return nil
+		log.Error("startup failed", "error", err)
+		return err
 	}
-	return db
+	return app.Run(ctx)
 }
