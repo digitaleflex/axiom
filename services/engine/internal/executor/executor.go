@@ -10,6 +10,7 @@ import (
 
 	"github.com/digitaleflex/axiom/services/engine/internal/build"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
+	"github.com/digitaleflex/axiom/services/engine/internal/health"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
 )
@@ -129,12 +130,31 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 	if _, err := e.deployments.Transition(ctx, id, deployment.StateVerifying); err != nil {
 		return Result{}, err
 	}
-	if err := e.step(ctx, log, id, "VERIFY", ErrorHealthCheckFailed, e.timeout("VERIFY", req.Plan), func(ctx context.Context, attempt int) error {
-		return e.agent.HealthCheck(ctx, HealthCheckRequest{
+	policy := health.DefaultPolicy(
+		req.Plan.Health.Type, req.Plan.Health.Path, req.Plan.Health.ExpectedStatus,
+		time.Duration(req.Plan.Health.TimeoutSeconds)*time.Second,
+		req.Plan.Health.Retries, time.Duration(req.Plan.Health.IntervalSeconds)*time.Second)
+	var lastReport health.ProbeReport
+	verifyErr := e.step(ctx, log, id, "VERIFY", ErrorHealthCheckFailed, e.timeout("VERIFY", req.Plan), func(ctx context.Context, attempt int) error {
+		report, err := e.agent.HealthCheck(ctx, HealthCheckRequest{
 			Operation: newOperation(corr, id, req.Plan.ServerID, "VERIFY", attempt),
 			Domain:    req.Plan.Network.Domain, Path: req.Plan.Health.Path, TimeoutSeconds: req.Plan.Health.TimeoutSeconds})
-	}); err != nil {
-		return e.fail(ctx, id, ErrorHealthCheckFailed, err)
+		if err != nil {
+			return err
+		}
+		lastReport = report
+		if status, reason := policy.Evaluate(report); status != health.StatusHealthy {
+			return fmt.Errorf("health check failed: %s", reason)
+		}
+		return e.deployments.RecordHealth(ctx, id, policy, report)
+	})
+	if verifyErr != nil {
+		// Persist the last probe result as health.failed so the failure is
+		// queryable even when the agent never produced a report (#65).
+		if err := e.deployments.RecordHealth(ctx, id, policy, lastReport); err != nil {
+			log.Warn("record health failure", "deploymentId", id, "error", err.Error())
+		}
+		return e.fail(ctx, id, ErrorHealthCheckFailed, verifyErr)
 	}
 
 	url := ""
@@ -320,4 +340,71 @@ func ExponentialBackoff(attempt int) time.Duration {
 		d = 30 * time.Second
 	}
 	return d
+}
+
+// LastHealthResult returns the newest persisted health probe result for a
+// deployment by scanning deployment events (health.passed / health.failed)
+// newest-first (#65). found is false when no health event exists. The event
+// data is the source for GET /deployments/{id}/health (API contract §16).
+func LastHealthResult(ctx context.Context, store deployment.Store, deploymentID string) (health.ProbeReport, bool, error) {
+	events, err := store.Events(ctx, deploymentID, 0, 1000)
+	if err != nil {
+		return health.ProbeReport{}, false, err
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		ev := events[i]
+		if ev.Type != health.EventPassed && ev.Type != health.EventFailed {
+			continue
+		}
+		data := ev.Data
+		return health.ProbeReport{
+			StatusCode: dataInt(data, "statusCode"),
+			LatencyMs:  dataInt64(data, "latencyMs"),
+			Body:       dataString(data, "body"),
+			CheckedAt:  dataTime(data, "checkedAt"),
+			Attempt:    dataInt(data, "attempt"),
+		}, true, nil
+	}
+	return health.ProbeReport{}, false, nil
+}
+
+// dataInt reads an integer event value, tolerating the float64 that JSON
+// round-tripping produces as well as native ints.
+func dataInt(data map[string]any, key string) int {
+	switch v := data[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	}
+	return 0
+}
+
+func dataInt64(data map[string]any, key string) int64 {
+	switch v := data[key].(type) {
+	case float64:
+		return int64(v)
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	}
+	return 0
+}
+
+func dataString(data map[string]any, key string) string {
+	s, _ := data[key].(string)
+	return s
+}
+
+func dataTime(data map[string]any, key string) time.Time {
+	s, _ := data[key].(string)
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }

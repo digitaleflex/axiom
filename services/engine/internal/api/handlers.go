@@ -9,6 +9,8 @@ import (
 
 	"github.com/digitaleflex/axiom/services/engine/internal/application"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
+	"github.com/digitaleflex/axiom/services/engine/internal/executor"
+	"github.com/digitaleflex/axiom/services/engine/internal/logs"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
 )
 
@@ -406,38 +408,93 @@ func (a *API) deploymentEvents(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// deploymentLogs: log storage arrives with #66/#86; the contract shape is
-// served now so clients can integrate (empty, never fabricated).
+// deploymentLogs serves durable, redacted logs (#66). Runtime log streaming
+// arrives with the agent (#86); stored lines are served here.
 func (a *API) deploymentLogs(w http.ResponseWriter, r *http.Request) error {
-	if _, err := a.loadDeployment(r); err != nil {
+	rec, err := a.loadDeployment(r)
+	if err != nil {
 		return err
 	}
-	if lvl := r.URL.Query().Get("level"); lvl != "" {
-		switch lvl {
-		case "debug", "info", "warn", "error":
+	if a.logs == nil {
+		return errUnavailable
+	}
+	q := r.URL.Query()
+	f := logs.Filter{Limit: 100}
+	if v := q.Get("level"); v != "" {
+		switch logs.Level(strings.ToUpper(v)) {
+		case logs.LevelDebug, logs.LevelInfo, logs.LevelWarn, logs.LevelError:
+			f.MinLevel = logs.Level(strings.ToUpper(v))
 		default:
 			return errInvalid("level must be debug, info, warn or error")
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": []any{}, "nextCursor": nil})
+	if v := q.Get("step"); v != "" {
+		switch logs.Step(strings.ToUpper(v)) {
+		case logs.StepBuild, logs.StepCreateRuntime, logs.StepNetwork, logs.StepStart, logs.StepVerify:
+			f.Step = logs.Step(strings.ToUpper(v))
+		default:
+			return errInvalid("step must be a canonical plan step")
+		}
+	}
+	if v := q.Get("source"); v != "" {
+		switch logs.Source(strings.ToLower(v)) {
+		case logs.SourceBuild, logs.SourceDeploy, logs.SourceRuntime:
+			f.Source = logs.Source(strings.ToLower(v))
+		default:
+			return errInvalid("source must be build, deploy or runtime")
+		}
+	}
+	f.Search = q.Get("q")
+	f.Cursor = q.Get("cursor")
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 1000 {
+			return errInvalid("limit must be an integer between 1 and 1000")
+		}
+		f.Limit = n
+	}
+	items, next, err := a.logs.List(r.Context(), rec.ID, f)
+	if err != nil {
+		return err
+	}
+	out := map[string]any{"items": items}
+	if next != "" {
+		out["nextCursor"] = next
+	}
+	writeJSON(w, http.StatusOK, out)
 	return nil
 }
 
-// deploymentHealth reports the verification outcome known to the Engine.
-// Live probe details arrive with runtime health (#85); until then the status
-// is derived only from authoritative state, never guessed.
+// deploymentHealth reports the verification outcome known to the Engine (#65):
+// persisted probe details when verification ran, otherwise the authoritative
+// state (LIVE implies a passed verification; anything else without probe
+// data is UNKNOWN, never an implied pass).
 func (a *API) deploymentHealth(w http.ResponseWriter, r *http.Request) error {
 	rec, err := a.loadDeployment(r)
 	if err != nil {
 		return err
 	}
 	status := "UNKNOWN"
+	out := map[string]any{"deploymentStatus": rec.Status}
+	if a.deployments != nil {
+		if report, found, err := executor.LastHealthResult(r.Context(), a.deployments.Store(), rec.ID); err != nil {
+			return err
+		} else if found {
+			out["http"] = map[string]any{"statusCode": report.StatusCode, "latencyMs": report.LatencyMs}
+			out["checkedAt"] = report.CheckedAt.UTC().Format(time.RFC3339)
+			out["attempt"] = report.Attempt
+			if report.Body != "" {
+				out["body"] = report.Body
+			}
+		}
+	}
 	switch {
 	case rec.Status == deployment.StateLive:
 		status = "HEALTHY"
 	case rec.Status == deployment.StateFailed && rec.ErrorCode == "HEALTH_CHECK_FAILED":
 		status = "UNHEALTHY"
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": status, "deploymentStatus": rec.Status})
+	out["status"] = status
+	writeJSON(w, http.StatusOK, out)
 	return nil
 }

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/digitaleflex/axiom/services/engine/internal/health"
 )
 
 // Service is the only writer of deployment state (ADR-0010). It validates
@@ -84,6 +86,50 @@ func (s *Service) Cancel(ctx context.Context, id string) (Record, error) {
 // RecordStep persists a step status change and publishes its event.
 func (s *Service) RecordStep(ctx context.Context, id string, change StepChange) error {
 	_, ev, err := s.store.UpdateStep(ctx, id, change)
+	if err != nil {
+		return err
+	}
+	s.bus.Publish(ev)
+	return nil
+}
+
+// healthEventStore is implemented by stores that can append health events
+// (MemoryStore and the PostgreSQL store). It is resolved by type assertion
+// so the Store interface stays unchanged.
+type healthEventStore interface {
+	AppendEvent(ctx context.Context, id, typ string, data map[string]any) (Event, error)
+}
+
+// RecordHealth persists a health probe result as a deployment event (#65):
+// health.passed when the report satisfies the policy, health.failed
+// otherwise. The event data carries status (HEALTHY/UNHEALTHY), statusCode,
+// latencyMs, path, checkedAt and attempt so GET /deployments/{id}/health
+// can be served from the persisted event log (API contract §14, §16).
+func (s *Service) RecordHealth(ctx context.Context, id string, policy health.Policy, report health.ProbeReport) error {
+	appender, ok := s.store.(healthEventStore)
+	if !ok {
+		return fmt.Errorf("store %T does not support health events", s.store)
+	}
+	status, reason := policy.Evaluate(report)
+	eventType := health.EventPassed
+	if status != health.StatusHealthy {
+		eventType = health.EventFailed
+	}
+	data := map[string]any{
+		"status":     status,
+		"statusCode": report.StatusCode,
+		"latencyMs":  report.LatencyMs,
+		"path":       policy.Path,
+		"checkedAt":  report.CheckedAt,
+		"attempt":    report.Attempt,
+	}
+	if report.Body != "" {
+		data["body"] = report.Body
+	}
+	if reason != "" {
+		data["reason"] = reason
+	}
+	ev, err := appender.AppendEvent(ctx, id, eventType, data)
 	if err != nil {
 		return err
 	}

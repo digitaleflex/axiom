@@ -615,21 +615,19 @@ Readiness checks required dependencies.
 
 `GET /api/v1/deployments/{deploymentId}/health`
 
-Example:
+Reports the verification outcome known to the Engine: persisted probe details when verification ran, otherwise the authoritative state.
 
 ```json
 {
   "status": "HEALTHY",
-  "http": {
-    "statusCode": 200,
-    "latencyMs": 84
-  },
-  "runtime": {
-    "status": "RUNNING"
-  }
+  "deploymentStatus": "LIVE",
+  "http": { "statusCode": 200, "latencyMs": 84 },
+  "checkedAt": "2026-10-07T14:05:02Z",
+  "attempt": 1
 }
 ```
 
+`status`: `HEALTHY` (LIVE), `UNHEALTHY` (failed with `HEALTH_CHECK_FAILED`), `UNKNOWN` (no probe data — never an implied pass). `http`, `checkedAt`, `attempt` (and `body` when the probe returned one) come from the persisted `health.passed` / `health.failed` events. Runtime details (container state) arrive with the Runtime Agent (#85).
 A deployment cannot transition to `LIVE` before successful health verification.
 
 ---

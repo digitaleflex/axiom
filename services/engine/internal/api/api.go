@@ -39,6 +39,7 @@ type Deps struct {
 	Analyses     Analyses
 	Plans        Plans
 	Domains      Domains
+	Logs         LogStore
 	// ConsoleURL is where the GitHub callback redirects the browser.
 	ConsoleURL string
 	// SecureCookies sets the Secure attribute on cookies (production).
@@ -57,6 +58,7 @@ type API struct {
 	analyses     Analyses
 	plans        Plans
 	domains      Domains
+	logs         LogStore
 	consoleURL   string
 	secure       bool
 	mux          *http.ServeMux
@@ -67,7 +69,7 @@ type API struct {
 func New(d Deps) http.Handler {
 	a := &API{
 		log: d.Log, auth: d.Auth, deployments: d.Deployments,
-		applications: d.Applications, servers: d.Servers, github: d.GitHub, repos: d.Repositories, analyses: d.Analyses, plans: d.Plans, domains: d.Domains,
+		applications: d.Applications, servers: d.Servers, github: d.GitHub, repos: d.Repositories, analyses: d.Analyses, plans: d.Plans, domains: d.Domains, logs: d.Logs,
 		consoleURL: d.ConsoleURL, secure: d.SecureCookies, mux: http.NewServeMux(),
 	}
 	if a.log == nil {

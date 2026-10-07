@@ -26,6 +26,7 @@ import (
 	ghauth "github.com/digitaleflex/axiom/services/engine/internal/github/auth"
 	"github.com/digitaleflex/axiom/services/engine/internal/github/repos"
 	"github.com/digitaleflex/axiom/services/engine/internal/httpserver"
+	"github.com/digitaleflex/axiom/services/engine/internal/logs"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner"
 	"github.com/digitaleflex/axiom/services/engine/internal/security/secrets"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
@@ -116,6 +117,7 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 	deps.Servers = server.NewService(database.NewRepositories(db).Servers)
 	domainService := &domains.Service{Store: domains.PGStore{DB: db}, Resolver: stdResolver{}}
 	deps.Domains = domainService
+	deps.Logs = logs.NewPGStore(db, 0)
 	deps.Plans = &planner.Service{Engine: planner.New(), Profiles: analysis.PGStore{DB: db}, Servers: deps.Servers, Domains: domainService, DB: db, NewID: deployment.NewID}
 	if cfg.GitHub.Enabled() {
 		key, err := secrets.ParseKey(cfg.SecretKey)

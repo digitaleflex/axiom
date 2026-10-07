@@ -3,10 +3,16 @@ package api
 import (
 	"context"
 	"errors"
+	"github.com/digitaleflex/axiom/services/engine/internal/logs"
 	"net/http"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/domains"
 )
+
+// LogStore serves persisted deployment logs (#66).
+type LogStore interface {
+	List(ctx context.Context, deploymentID string, f logs.Filter) ([]logs.Entry, string, error)
+}
 
 // Domains manages application hostnames (#64).
 type Domains interface {

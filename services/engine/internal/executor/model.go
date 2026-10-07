@@ -7,6 +7,7 @@ import (
 
 	"github.com/digitaleflex/axiom/services/engine/internal/build"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
+	"github.com/digitaleflex/axiom/services/engine/internal/health"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
 )
@@ -15,7 +16,11 @@ type RuntimeAgent interface {
 	CreateRuntime(ctx context.Context, req CreateRuntimeRequest) error
 	ConfigureNetwork(ctx context.Context, req NetworkRequest) error
 	StartRuntime(ctx context.Context, req StartRequest) error
-	HealthCheck(ctx context.Context, req HealthCheckRequest) error
+	// HealthCheck probes the deployed application and returns the probe
+	// report (#65). A transport-level failure (connection refused, timeout)
+	// is returned as an error; an HTTP response that fails the policy is
+	// still a report and must be evaluated by the caller.
+	HealthCheck(ctx context.Context, req HealthCheckRequest) (health.ProbeReport, error)
 }
 
 // Operation carries the envelope every bounded agent operation needs:

@@ -363,6 +363,36 @@ func (s *Store) Events(ctx context.Context, id string, afterSeq int64, limit int
 	return out, rows.Err()
 }
 
+// AppendEvent persists a standalone event (health results, #65) without a
+// step or status change. The deployment row is locked to serialize event
+// sequencing, mirroring UpdateStep.
+func (s *Store) AppendEvent(ctx context.Context, id, typ string, data map[string]any) (domain.Event, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.Event{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	var depID string
+	if err = tx.QueryRowContext(ctx, `SELECT id FROM deployments WHERE id = $1 FOR UPDATE`, id).Scan(&depID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.Event{}, domain.ErrNotFound
+		}
+		return domain.Event{}, fmt.Errorf("lock deployment: %w", err)
+	}
+	ev, err := appendEvent(ctx, tx, id, typ, data, s.now())
+	if err != nil {
+		return domain.Event{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return domain.Event{}, fmt.Errorf("commit: %w", err)
+	}
+	return ev, nil
+}
+
 // appendEvent assigns the next seq. Callers hold the deployment row lock.
 func appendEvent(ctx context.Context, tx *sql.Tx, deploymentID, typ string, data map[string]any, at time.Time) (domain.Event, error) {
 	raw, err := json.Marshal(data)

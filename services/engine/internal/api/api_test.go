@@ -161,6 +161,7 @@ func newHarness(t *testing.T) *harness {
 		Deployments:  svc,
 		Applications: apps,
 		Servers:      servers,
+		Logs:         &fakeLogs{},
 	})
 	return &harness{t: t, handler: h, store: store, svc: svc}
 }

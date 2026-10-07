@@ -9,9 +9,11 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/build"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
+	"github.com/digitaleflex/axiom/services/engine/internal/health"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner"
 	"github.com/digitaleflex/axiom/services/engine/internal/profile"
 )
@@ -63,9 +65,9 @@ func (a *fakeAgent) StartRuntime(context.Context, StartRequest) error {
 	a.steps = append(a.steps, "START")
 	return nil
 }
-func (a *fakeAgent) HealthCheck(context.Context, HealthCheckRequest) error {
+func (a *fakeAgent) HealthCheck(_ context.Context, _ HealthCheckRequest) (health.ProbeReport, error) {
 	a.steps = append(a.steps, "VERIFY")
-	return nil
+	return health.ProbeReport{StatusCode: 200, LatencyMs: 84, CheckedAt: time.Now().UTC(), Attempt: 1}, nil
 }
 
 var allSteps = []string{"BUILD", "CREATE_RUNTIME", "NETWORK", "START", "VERIFY"}
@@ -145,8 +147,8 @@ type failAgent struct{}
 func (a *failAgent) CreateRuntime(context.Context, CreateRuntimeRequest) error { return nil }
 func (a *failAgent) ConfigureNetwork(context.Context, NetworkRequest) error    { return nil }
 func (a *failAgent) StartRuntime(context.Context, StartRequest) error          { return nil }
-func (a *failAgent) HealthCheck(context.Context, HealthCheckRequest) error {
-	return errors.New("connection refused")
+func (a *failAgent) HealthCheck(context.Context, HealthCheckRequest) (health.ProbeReport, error) {
+	return health.ProbeReport{}, errors.New("connection refused")
 }
 
 func TestBuildFailureRecordsCode(t *testing.T) {

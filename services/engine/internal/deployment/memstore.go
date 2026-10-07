@@ -178,6 +178,18 @@ func (m *MemoryStore) Events(_ context.Context, id string, afterSeq int64, limit
 	return out, nil
 }
 
+// AppendEvent persists a standalone event (health results, #65) without a
+// step or status change. Callers must hold no lock; seq is assigned under
+// the store mutex.
+func (m *MemoryStore) AppendEvent(_ context.Context, id, typ string, data map[string]any) (Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.records[id]; !ok {
+		return Event{}, ErrNotFound
+	}
+	return m.appendLocked(id, typ, data), nil
+}
+
 func (m *MemoryStore) appendLocked(id, typ string, data map[string]any) Event {
 	// Round-trip through JSON so events have the same shape as persisted ones.
 	if raw, err := json.Marshal(data); err == nil {
