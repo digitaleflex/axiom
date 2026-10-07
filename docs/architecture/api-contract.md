@@ -883,3 +883,16 @@ Read logs/events without SSH
 ```
 
 The Cloud Console, CLI and future clients must be able to execute this workflow using only the documented Engine contracts.
+
+## 26. Agent API
+
+Agent-facing endpoints (authenticated by agent credentials, not user sessions — #76/#77). Domain contract: `docs/architecture/agent-protocol.md`.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/api/v1/servers/{serverId}/bootstrap` | Issue a one-time bootstrap token (user-authenticated; server must be `pending`) |
+| POST | `/api/v1/agent/register` | Register with bootstrap token → `{agentId, credential, credentialVersion, credentialExpiresAt, negotiated, heartbeatIntervalSeconds}` |
+| POST | `/api/v1/agent/rotate` | Rotate credential (old valid during 5-min grace) |
+| GET | `/api/v1/agent/status?agentId=&serverId=` | Registration status (`registered` / `revoked` / `unknown`) |
+
+Agent requests carry `Authorization: Bearer <credential>` + `X-Agent-ID` + `X-Timestamp` + `X-Nonce`; failures return 401 with `details.reason` (`invalid`, `expired`, `revoked`, `replay`, `clock_skew`). Credentials are stored as hashes only and never logged. Re-registration of a server returns the same `agentId` with an incremented credential version.

@@ -15,6 +15,7 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
+	"github.com/digitaleflex/axiom/services/engine/internal/agentauth"
 	"github.com/digitaleflex/axiom/services/engine/internal/analysis"
 	"github.com/digitaleflex/axiom/services/engine/internal/api"
 	"github.com/digitaleflex/axiom/services/engine/internal/api/sse"
@@ -115,6 +116,19 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 	deps.EventStream = &sse.Handler{Store: deps.Deployments.Store(), Bus: deps.Deployments.Events(), Log: log, Shutdown: streams}
 	deps.Applications = database.NewApplicationStore(db)
 	deps.Servers = server.NewService(database.NewRepositories(db).Servers)
+	deps.Agents = agentauth.NewService(
+		agentauth.NewPGStore(db),
+		agentauth.WithServerLookup(agentauth.ServerLookupFunc(func(ctx context.Context, serverID string) (string, error) {
+			rec, err := deps.Servers.Get(ctx, serverID)
+			if errors.Is(err, server.ErrNotFound) {
+				return "", agentauth.ErrServerNotFound
+			}
+			if err != nil {
+				return "", err
+			}
+			return string(rec.Status), nil
+		})),
+	)
 	domainService := &domains.Service{Store: domains.PGStore{DB: db}, Resolver: stdResolver{}}
 	deps.Domains = domainService
 	deps.Logs = logs.NewPGStore(db, 0)

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/digitaleflex/axiom/services/engine/internal/agentauth"
 	"github.com/digitaleflex/axiom/services/engine/internal/application"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
@@ -40,6 +41,8 @@ type Deps struct {
 	Plans        Plans
 	Domains      Domains
 	Logs         LogStore
+	// Agents owns agent registration and credential lifecycle (#76/#77).
+	Agents *agentauth.Service
 	// ConsoleURL is where the GitHub callback redirects the browser.
 	ConsoleURL string
 	// SecureCookies sets the Secure attribute on cookies (production).
@@ -59,6 +62,7 @@ type API struct {
 	plans        Plans
 	domains      Domains
 	logs         LogStore
+	agents       *agentauth.Service
 	consoleURL   string
 	secure       bool
 	mux          *http.ServeMux
@@ -70,6 +74,7 @@ func New(d Deps) http.Handler {
 	a := &API{
 		log: d.Log, auth: d.Auth, deployments: d.Deployments,
 		applications: d.Applications, servers: d.Servers, github: d.GitHub, repos: d.Repositories, analyses: d.Analyses, plans: d.Plans, domains: d.Domains, logs: d.Logs,
+		agents:     d.Agents,
 		consoleURL: d.ConsoleURL, secure: d.SecureCookies, mux: http.NewServeMux(),
 	}
 	if a.log == nil {
@@ -116,6 +121,14 @@ func New(d Deps) http.Handler {
 	r.HandleFunc("DELETE /api/v1/servers/{serverID}", a.wrap(a.removeServer))
 	r.HandleFunc("GET /api/v1/servers/{serverID}/health", a.wrap(a.serverHealth))
 
+	r.HandleFunc("POST /api/v1/servers/{serverID}/bootstrap", a.wrap(a.bootstrapServer))
+
+	// Agent-facing endpoints authenticate with agent credentials in the handler
+	// (#76/#77), not with the user authenticator.
+	r.HandleFunc("POST /api/v1/agent/register", a.wrap(a.agentRegister))
+	r.HandleFunc("POST /api/v1/agent/rotate", a.wrap(a.agentRotate))
+	r.HandleFunc("GET /api/v1/agent/status", a.wrap(a.agentStatus))
+
 	r.HandleFunc("POST /api/v1/applications/{applicationID}/deployments", a.wrap(a.createDeployment))
 	r.HandleFunc("GET /api/v1/applications/{applicationID}/deployments", a.wrap(a.listDeployments))
 	r.HandleFunc("GET /api/v1/deployments/{deploymentID}", a.wrap(a.getDeployment))
@@ -136,7 +149,7 @@ func New(d Deps) http.Handler {
 	}))
 
 	var h http.Handler = r
-	h = a.authenticate(h)
+	h = a.authenticateWithAgents(h)
 	h = a.accessLog(h)
 	h = a.recoverer(h)
 	h = requestIDMiddleware(h)
