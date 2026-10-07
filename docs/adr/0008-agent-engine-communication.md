@@ -8,6 +8,8 @@
 
 Runtime Agents run on user servers, often behind NAT/firewalls. The Engine must remain authoritative and operations must be replay-resistant.
 
+The domain contract is fixed in [`docs/architecture/agent-protocol.md`](../architecture/agent-protocol.md) with machine types in `services/agent/internal/protocol/`.
+
 ## Decision (proposed)
 
 - The Agent initiates an outbound, authenticated connection to the Engine (no inbound port on the server).
