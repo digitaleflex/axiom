@@ -65,8 +65,10 @@ func (in CreateInput) RequestHash() string {
 	return hex.EncodeToString(sum[:])
 }
 
-// IdempotencyScope namespaces keys per application.
-func (in CreateInput) IdempotencyScope() string { return "deployments.create:" + in.ApplicationID }
+// IdempotencyScope namespaces keys per actor, operation and application (API §20).
+func (in CreateInput) IdempotencyScope() string {
+	return "deployments.create:" + in.CreatedBy + ":" + in.ApplicationID
+}
 
 // StatusChange describes a requested transition and optional outcome fields.
 type StatusChange struct {

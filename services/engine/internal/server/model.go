@@ -1,6 +1,9 @@
 package server
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 type Status string
 
@@ -56,3 +59,6 @@ type EligibilityResult struct {
 	Eligible bool
 	Reasons  []string
 }
+
+// ErrNotFound is returned when a server does not exist.
+var ErrNotFound = errors.New("server not found")

@@ -1,164 +1,95 @@
+// Package api implements the public REST contract /api/v1
+// (docs/architecture/api-contract.md). It exposes resources, never
+// infrastructure internals, and renders every error with the stable envelope.
 package api
 
 import (
-	"database/sql"
-	"encoding/json"
+	"context"
+	"log/slog"
 	"net/http"
-	"strings"
-	"time"
 
-	deploymentdb "github.com/digitaleflex/axiom/services/engine/internal/database/deployment"
+	"github.com/digitaleflex/axiom/services/engine/internal/application"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
+	"github.com/digitaleflex/axiom/services/engine/internal/server"
 )
 
+// ServerStore is the read model for servers.
+type ServerStore interface {
+	Get(ctx context.Context, id string) (server.Record, error)
+	List(ctx context.Context, limit, offset int) ([]server.Record, int, error)
+}
+
+// Deps are the API dependencies, injected by the composition root.
+// A nil dependency makes the corresponding endpoints answer 503.
+type Deps struct {
+	Log           *slog.Logger
+	Auth          Authenticator
+	Deployments   *deployment.Service
+	Applications  application.Store
+	Servers       ServerStore
+	EventStream   http.Handler // GET /deployments/{id}/events/stream (SSE, #118)
+	PublicBaseURL string       // optional; used for Location headers
+}
+
+// API serves /api/v1.
 type API struct {
-	db          *sql.DB
-	deployments *deployment.Service
+	log          *slog.Logger
+	auth         Authenticator
+	deployments  *deployment.Service
+	applications application.Store
+	servers      ServerStore
+	mux          *http.ServeMux
 }
 
-func New(db *sql.DB) http.Handler {
-	a := &API{db: db}
-	if db != nil {
-		a.deployments = deployment.NewService(deploymentdb.New(db), deployment.NewEventBus())
+// New builds the API handler with its middleware chain:
+// request ID → recover → access log → authentication → routes.
+func New(d Deps) http.Handler {
+	a := &API{
+		log: d.Log, auth: d.Auth, deployments: d.Deployments,
+		applications: d.Applications, servers: d.Servers, mux: http.NewServeMux(),
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/auth/me", a.me)
-	mux.HandleFunc("GET /api/v1/servers", a.servers)
-	mux.HandleFunc("GET /api/v1/deployments/{deploymentID}", a.deployment)
-	mux.HandleFunc("GET /api/v1/deployments/{deploymentID}/health", a.deploymentHealth)
-	mux.HandleFunc("GET /api/v1/deployments/{deploymentID}/events/stream", a.eventStream)
-	mux.HandleFunc("GET /api/v1/deployments/{deploymentID}/logs", a.logs)
-	mux.HandleFunc("POST /api/v1/applications/{applicationID}/deployments", a.createDeployment)
-	return mux
-}
+	if a.log == nil {
+		a.log = slog.Default()
+	}
+	if a.auth == nil {
+		a.auth = denyAll{}
+	}
 
-func (a *API) me(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"authenticated": false, "requestId": r.Header.Get("X-Request-ID")})
-}
+	r := a.mux
+	r.HandleFunc("GET /api/v1/auth/me", a.wrap(a.me))
+	r.HandleFunc("POST /api/v1/auth/logout", a.wrap(a.logout))
 
-func (a *API) servers(w http.ResponseWriter, _ *http.Request) {
-	if a.db == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "DEPENDENCY_UNAVAILABLE", "database is unavailable", nil)
-		return
-	}
-	rows, err := a.db.Query("SELECT id, name, address, status FROM servers ORDER BY name")
-	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to list servers", nil)
-		return
-	}
-	defer rows.Close()
-	items := make([]map[string]any, 0)
-	for rows.Next() {
-		var id, name, address, status string
-		if err := rows.Scan(&id, &name, &address, &status); err != nil {
-			writeAPIError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to read server", nil)
-			return
-		}
-		items = append(items, map[string]any{"id": id, "name": name, "address": address, "status": status})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "page": 1, "limit": len(items), "total": len(items)})
-}
+	r.HandleFunc("GET /api/v1/applications", a.wrap(a.listApplications))
+	r.HandleFunc("POST /api/v1/applications", a.wrap(a.createApplication))
+	r.HandleFunc("GET /api/v1/applications/{applicationID}", a.wrap(a.getApplication))
 
-func (a *API) deployment(w http.ResponseWriter, r *http.Request) {
-	if a.db == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "DEPENDENCY_UNAVAILABLE", "database is unavailable", nil)
-		return
-	}
-	id := r.PathValue("deploymentID")
-	var appID, serverID, environment, status string
-	err := a.db.QueryRowContext(r.Context(), "SELECT application_id, server_id, environment, status FROM deployments WHERE id = $1", id).
-		Scan(&appID, &serverID, &environment, &status)
-	if err == sql.ErrNoRows {
-		writeAPIError(w, http.StatusNotFound, "NOT_FOUND", "deployment not found", map[string]any{"deploymentId": id})
-		return
-	}
-	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to read deployment", nil)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": id, "applicationId": appID, "serverId": serverID, "environment": environment, "status": status})
-}
+	r.HandleFunc("GET /api/v1/servers", a.wrap(a.listServers))
+	r.HandleFunc("GET /api/v1/servers/{serverID}", a.wrap(a.getServer))
+	r.HandleFunc("GET /api/v1/servers/{serverID}/health", a.wrap(a.serverHealth))
 
-func (a *API) createDeployment(w http.ResponseWriter, r *http.Request) {
-	if a.deployments == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "DEPENDENCY_UNAVAILABLE", "deployment service is unavailable", nil)
-		return
+	r.HandleFunc("POST /api/v1/applications/{applicationID}/deployments", a.wrap(a.createDeployment))
+	r.HandleFunc("GET /api/v1/applications/{applicationID}/deployments", a.wrap(a.listDeployments))
+	r.HandleFunc("GET /api/v1/deployments/{deploymentID}", a.wrap(a.getDeployment))
+	r.HandleFunc("POST /api/v1/deployments/{deploymentID}/cancel", a.wrap(a.cancelDeployment))
+	r.HandleFunc("GET /api/v1/deployments/{deploymentID}/steps", a.wrap(a.deploymentSteps))
+	r.HandleFunc("GET /api/v1/deployments/{deploymentID}/events", a.wrap(a.deploymentEvents))
+	r.HandleFunc("GET /api/v1/deployments/{deploymentID}/logs", a.wrap(a.deploymentLogs))
+	r.HandleFunc("GET /api/v1/deployments/{deploymentID}/health", a.wrap(a.deploymentHealth))
+	if d.EventStream != nil {
+		r.Handle("GET /api/v1/deployments/{deploymentID}/events/stream", a.ownedDeployment(d.EventStream))
+	} else {
+		r.HandleFunc("GET /api/v1/deployments/{deploymentID}/events/stream", a.wrap(func(http.ResponseWriter, *http.Request) error { return errUnavailable }))
 	}
-	var input struct {
-		PlanID string `json:"planId"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", "request body must be valid JSON", nil)
-		return
-	}
-	record, _, err := a.deployments.Create(r.Context(), deployment.CreateInput{
-		ApplicationID: r.PathValue("applicationID"), PlanID: strings.TrimSpace(input.PlanID), IdempotencyKey: r.Header.Get("Idempotency-Key"),
-	})
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error(), nil)
-		return
-	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"id": record.ID, "status": record.Status})
-}
 
-func (a *API) deploymentHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "UNKNOWN", "message": "health verification is owned by the Deployment Engine"})
-}
+	// Unknown /api/v1 paths use the error envelope instead of plain-text 404s.
+	r.HandleFunc("/api/v1/", a.wrap(func(_ http.ResponseWriter, r *http.Request) error {
+		return newError(http.StatusNotFound, CodeNotFound, "no such endpoint", map[string]any{"path": r.URL.Path})
+	}))
 
-func (a *API) logs(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"items": []any{}, "nextCursor": nil})
-}
-
-func (a *API) eventStream(w http.ResponseWriter, r *http.Request) {
-	if a.deployments == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "DEPENDENCY_UNAVAILABLE", "deployment service is unavailable", nil)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "streaming is unsupported", nil)
-		return
-	}
-	deploymentID := r.PathValue("deploymentID")
-	ch, unsubscribe := a.deployments.Events().Subscribe(deploymentID)
-	defer unsubscribe()
-
-	writeSSE(w, flusher, deployment.Event{
-		ID: "evt-bootstrap", Type: "deployment.stream.connected", Version: 1,
-		DeploymentID: deploymentID, OccurredAt: time.Now().UTC(),
-		Data: map[string]any{"status": "CONNECTED"},
-	})
-
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case event, ok := <-ch:
-			if !ok {
-				return
-			}
-			writeSSE(w, flusher, event)
-		}
-	}
-}
-
-func writeSSE(w http.ResponseWriter, flusher http.Flusher, event deployment.Event) {
-	payload, _ := json.Marshal(event)
-	_, _ = w.Write([]byte("event: " + event.Type + "\ndata: " + string(payload) + "\n\n"))
-	flusher.Flush()
-}
-
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
-func writeAPIError(w http.ResponseWriter, status int, code, message string, details any) {
-	writeJSON(w, status, map[string]any{"error": map[string]any{
-		"code": code, "message": message, "requestId": w.Header().Get("X-Request-ID"), "details": details,
-	}})
+	var h http.Handler = r
+	h = a.authenticate(h)
+	h = a.accessLog(h)
+	h = a.recoverer(h)
+	h = requestIDMiddleware(h)
+	return h
 }

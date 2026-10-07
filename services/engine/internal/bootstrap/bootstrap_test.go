@@ -3,9 +3,11 @@ package bootstrap
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strconv"
 	"strings"
@@ -119,13 +121,68 @@ func TestWithDatabase(t *testing.T) {
 	if url == "" {
 		t.Skip("AXIOM_TEST_DATABASE_URL is not set")
 	}
-	cfg := testConfig(t, map[string]string{"DATABASE_URL": url, "AXIOM_DB_REQUIRED": "true"})
+	const token = "bootstrap-test-token-0123456789abcdef"
+	cfg := testConfig(t, map[string]string{"DATABASE_URL": url, "AXIOM_DB_REQUIRED": "true", "AXIOM_API_TOKEN": token})
 	app, err := New(context.Background(), cfg, logger.NewWriter(&bytes.Buffer{}, "error"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if app.DB() == nil {
-		t.Fatal("expected database handle")
+	defer app.close()
+	db := app.DB()
+	ctx := context.Background()
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
+	for _, q := range []string{
+		`INSERT INTO github_connections (id, user_id) VALUES ('ghc_` + suffix + `', 'usr_local')`,
+		`INSERT INTO repositories (id, connection_id, external_id, full_name, clone_url) VALUES ('repo_` + suffix + `', 'ghc_` + suffix + `', '` + suffix + `', 'acme/web', 'https://github.com/acme/web.git')`,
+		`INSERT INTO servers (id, name, address, status) VALUES ('srv_` + suffix + `', 'srv', '203.0.113.10', 'ready')`,
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
 	}
-	app.close()
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM github_connections WHERE id = 'ghc_`+suffix+`'`)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM servers WHERE id = 'srv_`+suffix+`'`)
+	})
+
+	call := func(method, path, body string, hdr map[string]string) (int, map[string]any) {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		rr := httptest.NewRecorder()
+		app.Handler().ServeHTTP(rr, req)
+		var out map[string]any
+		_ = json.Unmarshal(rr.Body.Bytes(), &out)
+		return rr.Code, out
+	}
+
+	code, created := call("POST", "/api/v1/applications", `{"repositoryId":"repo_`+suffix+`","name":"web-`+suffix+`"}`, nil)
+	if code != 201 {
+		t.Fatalf("create application = %d %v", code, created)
+	}
+	appID := created["id"].(string)
+	if _, err := db.ExecContext(ctx, `INSERT INTO deployment_plans (id, application_id, server_id, environment, ref, application_profile_version, fingerprint, body)
+		VALUES ('plan_`+suffix+`', $1, 'srv_`+suffix+`', 'production', 'main', 1, 'sha256:x', '{"steps":["BUILD","VERIFY"]}')`, appID); err != nil {
+		t.Fatal(err)
+	}
+	key := map[string]string{"Idempotency-Key": "k-" + suffix}
+	code, dep := call("POST", "/api/v1/applications/"+appID+"/deployments", `{"planId":"plan_`+suffix+`"}`, key)
+	if code != 202 || dep["status"] != "PENDING" {
+		t.Fatalf("create deployment = %d %v", code, dep)
+	}
+	code, again := call("POST", "/api/v1/applications/"+appID+"/deployments", `{"planId":"plan_`+suffix+`"}`, key)
+	if code != 202 || again["id"] != dep["id"] {
+		t.Fatalf("idempotent replay = %d %v", code, again)
+	}
+	code, got := call("GET", "/api/v1/deployments/"+dep["id"].(string)+"/steps", "", nil)
+	if code != 200 || len(got["items"].([]any)) != 2 {
+		t.Fatalf("steps = %d %v", code, got)
+	}
+	if code, _ := call("GET", "/api/v1/servers/srv_"+suffix, "", nil); code != 200 {
+		t.Fatalf("get server = %d", code)
+	}
 }

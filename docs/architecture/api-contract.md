@@ -71,8 +71,10 @@ Idempotency-Key: <unique-operation-key>
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| GET | `/api/v1/auth/me` | Return current user |
-| POST | `/api/v1/auth/logout` | End current session |
+| GET | `/api/v1/auth/me` | Return current user (`{ "id", "name" }`) |
+| POST | `/api/v1/auth/logout` | End current session (`204`) |
+
+Interim (until #125): a single bearer token configured with `AXIOM_API_TOKEN` (required in production); development without a token authenticates as a local operator. Missing/invalid credentials → `401 UNAUTHORIZED` with `WWW-Authenticate: Bearer`.
 
 The concrete identity provider is an implementation detail of the Engine and must not leak into the deployment API.
 
@@ -334,18 +336,33 @@ Request:
 }
 ```
 
+Server and environment are taken from the plan; the request accepts only `planId` (unknown fields are rejected). A plan is single-use.
+
 Response:
 
 ```http
 HTTP/1.1 202 Accepted
+Location: /api/v1/deployments/dep_123
+Idempotent-Replayed: true        (only when an Idempotency-Key replay returned an existing deployment)
 ```
 
 ```json
 {
   "id": "dep_123",
-  "status": "PENDING"
+  "number": 42,
+  "applicationId": "app_123",
+  "serverId": "srv_123",
+  "environment": "production",
+  "planId": "plan_123",
+  "status": "PENDING",
+  "createdAt": "2026-10-07T14:01:50Z",
+  "updatedAt": "2026-10-07T14:01:50Z"
 }
 ```
+
+Deployment resources also carry, when set: `url` (LIVE), `errorCode` (FAILED, §18), `createdBy`, `startedAt`, `completedAt`.
+
+Errors: `404 NOT_FOUND` (application or plan), `409 CONFLICT` (plan already used, or Idempotency-Key reused with a different request), `422 VALIDATION_FAILED` (missing `planId`).
 
 ### Get deployment
 
@@ -359,13 +376,14 @@ Query parameters:
 
 - `page`
 - `limit`
-- `status`
+- `status` (canonical status)
+- `environment` (`production`, `staging`, `preview`)
 
 ### Cancel deployment
 
 `POST /api/v1/deployments/{deploymentId}/cancel`
 
-Cancellation is allowed only when the current state permits it.
+Cancellation is allowed in every non-terminal state except `VERIFYING` (the outcome belongs to health verification). Returns the updated deployment (`status: CANCELLED`); otherwise `409 DEPLOYMENT_INVALID_STATE`.
 
 ---
 
@@ -387,7 +405,12 @@ DEPLOYING
 VERIFYING
    ├──→ LIVE
    └──→ FAILED
+
+Any non-terminal state → FAILED
+Any non-terminal state except VERIFYING → CANCELLED (via cancel)
 ```
+
+Terminal states: `LIVE`, `FAILED`, `CANCELLED`.
 
 The Engine is the authoritative owner of deployment state.
 
@@ -438,7 +461,17 @@ Query parameters:
 
 ### Deployment events
 
-`GET /api/v1/deployments/{deploymentId}/events`
+`GET /api/v1/deployments/{deploymentId}/events?after={seq}&limit={n}`
+
+Returns persisted events ordered by `seq` (strictly increasing per deployment, starting at 1). `after` resumes a timeline; `nextAfter` is set when more events may exist.
+
+```json
+{ "items": [ { "id": "evt_…", "seq": 2, "type": "deployment.status.changed", "version": 1,
+               "deploymentId": "dep_123", "occurredAt": "…", "data": { "from": "PENDING", "status": "ANALYZING" } } ],
+  "nextAfter": null }
+```
+
+Event types: `deployment.created`, `deployment.status.changed`, `deployment.step.started`, `deployment.step.completed`, `deployment.step.failed`, `deployment.step.skipped`.
 
 Events include:
 
@@ -584,6 +617,11 @@ All API errors use:
 - `HEALTH_CHECK_FAILED`
 - `POLICY_DENIED`
 - `INTERNAL_ERROR`
+- `SERVICE_UNAVAILABLE` — a required dependency (e.g. database) is unavailable (HTTP 503)
+
+Every response carries `X-Request-ID` (client value echoed when it matches `[A-Za-z0-9._-]{1,64}`, otherwise generated); the same value is `error.requestId`. `details` is always an object; validation errors use `details.fields`.
+
+Request bodies must be `application/json` (else `415 INVALID_REQUEST`), at most 1 MiB (else `413 INVALID_REQUEST`), a single JSON object without unknown fields (else `400 INVALID_REQUEST`).
 
 The human-readable message is not the stable machine contract; clients must branch on the error code.
 
@@ -602,6 +640,8 @@ The human-readable message is not the stable machine contract; clients must bran
 | 403 | Authenticated but unauthorized |
 | 404 | Resource not found |
 | 409 | State/idempotency/conflict |
+| 413 | Request body too large |
+| 415 | Unsupported content type |
 | 422 | Validation failure |
 | 429 | Rate limited |
 | 500 | Unexpected Engine failure |

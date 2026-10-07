@@ -35,6 +35,9 @@ type Config struct {
 	LogLevel        string
 	ShutdownTimeout time.Duration
 	Database        DatabaseConfig
+	// APIToken is the interim bearer token protecting /api/v1 until user
+	// authentication (#125) lands. Required in production; never logged.
+	APIToken string
 }
 
 type DatabaseConfig struct {
@@ -65,6 +68,7 @@ func LoadFrom(lookup func(string) (string, bool)) (Config, error) {
 			ConnMaxLifetime: r.duration("AXIOM_DB_CONN_MAX_LIFETIME", 30*time.Minute),
 		},
 	}
+	cfg.APIToken = r.str("AXIOM_API_TOKEN", "")
 	// Production always requires the database; elsewhere it is opt-in.
 	cfg.Database.Required = r.bool("AXIOM_DB_REQUIRED", cfg.Env == EnvProduction)
 
@@ -104,6 +108,9 @@ func (c Config) Validate() error {
 	}
 	if c.Env == EnvProduction && !c.Database.Required {
 		errs = append(errs, errors.New("AXIOM_DB_REQUIRED cannot be false in production"))
+	}
+	if c.Env == EnvProduction && len(c.APIToken) < 32 {
+		errs = append(errs, errors.New("AXIOM_API_TOKEN of at least 32 characters is required in production"))
 	}
 	if c.Database.MaxIdleConns > c.Database.MaxOpenConns && c.Database.MaxOpenConns > 0 {
 		errs = append(errs, errors.New("AXIOM_DB_MAX_IDLE_CONNS cannot exceed AXIOM_DB_MAX_OPEN_CONNS"))

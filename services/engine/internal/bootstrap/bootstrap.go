@@ -18,6 +18,8 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/api"
 	"github.com/digitaleflex/axiom/services/engine/internal/config"
 	"github.com/digitaleflex/axiom/services/engine/internal/database"
+	deploymentdb "github.com/digitaleflex/axiom/services/engine/internal/database/deployment"
+	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/httpserver"
 	"github.com/digitaleflex/axiom/services/engine/migrations"
 )
@@ -50,7 +52,15 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	}
 
 	streams, cancelStreams := context.WithCancel(context.Background())
-	handler := httpserver.NewHandler(cfg, db, api.New(db))
+	deps, err := buildAPIDeps(ctx, cfg, log, db)
+	if err != nil {
+		cancelStreams()
+		if db != nil {
+			_ = db.Close()
+		}
+		return nil, err
+	}
+	handler := httpserver.NewHandler(cfg, db, api.New(deps))
 	app := &App{
 		cfg:           cfg,
 		streams:       streams,
@@ -67,6 +77,35 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 		},
 	}
 	return app, nil
+}
+
+// localOperator is the interim principal until user authentication (#125).
+var localOperator = api.Principal{UserID: "usr_local", Name: "Local operator"}
+
+// buildAPIDeps wires stores and services. Without a database, data endpoints
+// answer 503 SERVICE_UNAVAILABLE instead of serving in-memory state.
+func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *sql.DB) (api.Deps, error) {
+	deps := api.Deps{Log: log}
+	switch {
+	case cfg.APIToken != "":
+		deps.Auth = api.NewTokenAuthenticator(cfg.APIToken, localOperator)
+	case cfg.Env == config.EnvDevelopment:
+		log.Warn("API authentication disabled: development mode without AXIOM_API_TOKEN")
+		deps.Auth = api.DevAuthenticator{Principal: localOperator}
+	default:
+		log.Warn("no API authenticator configured; all /api/v1 requests will be rejected")
+	}
+	if db == nil {
+		return deps, nil
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO users (id, display_name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`,
+		localOperator.UserID, localOperator.Name); err != nil {
+		return api.Deps{}, fmt.Errorf("ensure local operator: %w", err)
+	}
+	deps.Deployments = deployment.NewService(deploymentdb.New(db), deployment.NewEventBus())
+	deps.Applications = database.NewApplicationStore(db)
+	deps.Servers = database.NewRepositories(db).Servers
+	return deps, nil
 }
 
 // openDatabase connects and migrates. Optional databases degrade to nil with a warning.

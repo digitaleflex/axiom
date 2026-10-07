@@ -44,7 +44,11 @@ func TestProductionRequiresDatabase(t *testing.T) {
 	if err == nil {
 		t.Fatal("production must not allow AXIOM_DB_REQUIRED=false")
 	}
-	cfg, err := LoadFrom(env(map[string]string{"AXIOM_ENV": "production", "DATABASE_URL": "postgres://db/axiom"}))
+	token := "0123456789abcdef0123456789abcdef"
+	if _, err := LoadFrom(env(map[string]string{"AXIOM_ENV": "production", "DATABASE_URL": "postgres://db/axiom"})); err == nil {
+		t.Fatal("production must require AXIOM_API_TOKEN")
+	}
+	cfg, err := LoadFrom(env(map[string]string{"AXIOM_ENV": "production", "DATABASE_URL": "postgres://db/axiom", "AXIOM_API_TOKEN": token}))
 	if err != nil || !cfg.Database.Required {
 		t.Fatalf("valid production config rejected: %v", err)
 	}
