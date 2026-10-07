@@ -1,0 +1,9 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8080:3000"
+  admin:
+    build: ./admin
+    ports:
+      - "9000:9000"

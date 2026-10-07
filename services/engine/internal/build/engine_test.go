@@ -151,7 +151,8 @@ func TestBuildFailuresAreStructured(t *testing.T) {
 	}
 	compose := nextPlan()
 	compose.Build.Strategy = "compose"
-	if _, err := eng.Build(context.Background(), Input{DeploymentID: "dep_1", Commit: commit, Plan: compose, Source: fakeSource{}}); !isCode(err, CodeComposePending) {
+	if _, err := eng.Build(context.Background(), Input{DeploymentID: "dep_1", Commit: commit, Plan: compose,
+		Source: fakeSource{data: archive(map[string]string{"compose.yaml": "services:\n  web:\n    image: nginx\n"})}}); !isCode(err, CodeComposeNoBuild) {
 		t.Fatalf("compose: %v", err)
 	}
 	eng, _, root := testEngine(t, &fakeBuilder{err: &Error{Code: CodeBuildFailed, Message: "boom", ExitCode: 2}})

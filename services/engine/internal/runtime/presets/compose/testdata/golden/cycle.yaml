@@ -1,0 +1,9 @@
+services:
+  a:
+    build: .
+    depends_on:
+      - b
+  b:
+    build: .
+    depends_on:
+      - a

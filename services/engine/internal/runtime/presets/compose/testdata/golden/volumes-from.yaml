@@ -1,0 +1,7 @@
+services:
+  web:
+    build: .
+    volumes_from:
+      - sidecar
+  sidecar:
+    image: busybox

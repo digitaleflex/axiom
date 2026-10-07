@@ -68,6 +68,9 @@ type RuntimePlan struct {
 	Port          int      `json:"port"`
 	Configuration []string `json:"configuration"` // variable names only
 	Services      []string `json:"services,omitempty"`
+	// DependencyOrder is the topological order of Services (compose only,
+	// dependencies first). Empty for non-compose plans.
+	DependencyOrder []string `json:"dependencyOrder,omitempty"`
 }
 
 type NetworkPlan struct {

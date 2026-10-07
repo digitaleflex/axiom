@@ -76,6 +76,9 @@ func (e *Engine) Generate(req Request) (Plan, error) {
 	if errs := validation.Validate(toInput(plan, req.Server)); len(errs) > 0 {
 		return Plan{}, errs
 	}
+	if errs := validateComposeSelection(plan); len(errs) > 0 {
+		return Plan{}, errs
+	}
 	plan.Fingerprint = Fingerprint(plan)
 	return plan, nil
 }

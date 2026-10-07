@@ -29,6 +29,13 @@ const (
 	CodeSourceFailed   = "BUILD_SOURCE_FAILED"
 	CodeNoDockerfile   = "BUILD_NO_DOCKERFILE"
 	CodeComposePending = "BUILD_COMPOSE_PENDING"
+	CodeComposeInvalid = "BUILD_COMPOSE_INVALID"
+	// CodeComposeFileMissing: strategy is compose but the source has no
+	// compose file.
+	CodeComposeFileMissing = "BUILD_COMPOSE_FILE_MISSING"
+	// CodeComposeNoBuild: the selected compose services have no build section,
+	// so there is nothing for the build stage to produce.
+	CodeComposeNoBuild = "BUILD_COMPOSE_NO_BUILD"
 	CodeBuildFailed    = "BUILD_FAILED"
 	CodeInterrupted    = "BUILD_INTERRUPTED"
 	CodeInternal       = "BUILD_INTERNAL"
@@ -131,10 +138,6 @@ func (e *Engine) Build(ctx context.Context, in Input) (Result, error) {
 	if in.DeploymentID == "" || !shaRe.MatchString(in.Commit) {
 		return Result{}, &Error{Code: CodeInvalidInput, Message: "deployment ID and an exact 40-character commit SHA are required"}
 	}
-	if in.Plan.Build.Strategy == "compose" {
-		return Result{}, &Error{Code: CodeComposePending,
-			Message: "Compose service builds are resolved by the Compose preset (#123); single-image builds cannot represent them"}
-	}
 	ws, err := e.Workspaces.Create(ctx)
 	if err != nil {
 		return Result{}, &Error{Code: CodeInternal, Message: "create build workspace", Cause: err}
@@ -152,6 +155,12 @@ func (e *Engine) Build(ctx context.Context, in Input) (Result, error) {
 	if err != nil {
 		e.log(ctx, in.DeploymentID, "ERROR", "extract source archive: "+err.Error())
 		return Result{}, wrapSourceError(err)
+	}
+
+	// Compose is resolved against the extracted source: the compose file and
+	// each service build context live in the workspace (#123).
+	if in.Plan.Build.Strategy == "compose" {
+		return e.buildCompose(ctx, in, ws)
 	}
 
 	dockerfile, generated, err := e.resolveDockerfile(ws.Dir, in.Plan)

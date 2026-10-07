@@ -1,0 +1,8 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8080:3000"
+    volumes:
+      - /etc/passwd:/etc/passwd:ro
+      - /var/run/docker.sock:/var/run/docker.sock
