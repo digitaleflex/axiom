@@ -48,7 +48,7 @@ func TestProductionRequiresDatabase(t *testing.T) {
 	if _, err := LoadFrom(env(map[string]string{"AXIOM_ENV": "production", "DATABASE_URL": "postgres://db/axiom"})); err == nil {
 		t.Fatal("production must require AXIOM_API_TOKEN")
 	}
-	cfg, err := LoadFrom(env(map[string]string{"AXIOM_ENV": "production", "DATABASE_URL": "postgres://db/axiom", "AXIOM_API_TOKEN": token}))
+	cfg, err := LoadFrom(env(map[string]string{"AXIOM_ENV": "production", "DATABASE_URL": "postgres://db/axiom", "AXIOM_API_TOKEN": token, "AXIOM_SECRET_KEY": testKey}))
 	if err != nil || !cfg.Database.Required {
 		t.Fatalf("valid production config rejected: %v", err)
 	}
@@ -77,5 +77,25 @@ func TestErrorsNeverLeakDatabaseCredentials(t *testing.T) {
 	_, err := LoadFrom(env(map[string]string{"DATABASE_URL": "mysql://admin:s3cret@db/axiom"}))
 	if err == nil || strings.Contains(err.Error(), "s3cret") {
 		t.Fatalf("error must not contain credentials: %v", err)
+	}
+}
+
+const testKey = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="
+
+func TestGitHubConfiguration(t *testing.T) {
+	base := map[string]string{"AXIOM_GITHUB_CLIENT_ID": "Iv1.abc", "AXIOM_GITHUB_CLIENT_SECRET": "s", "AXIOM_GITHUB_REDIRECT_URL": "https://engine.example.com/api/v1/github/callback"}
+	if _, err := LoadFrom(env(base)); err == nil {
+		t.Fatal("GitHub requires AXIOM_SECRET_KEY")
+	}
+	base["AXIOM_SECRET_KEY"] = testKey
+	cfg, err := LoadFrom(env(base))
+	if err != nil || !cfg.GitHub.Enabled() || cfg.GitHub.APIURL != "https://api.github.com" {
+		t.Fatalf("valid GitHub config rejected: %v %+v", err, cfg.GitHub)
+	}
+	if _, err := LoadFrom(env(map[string]string{"AXIOM_GITHUB_CLIENT_ID": "x"})); err == nil {
+		t.Fatal("partial GitHub config must be rejected")
+	}
+	if _, err := LoadFrom(env(map[string]string{"AXIOM_SECRET_KEY": "short"})); err == nil {
+		t.Fatal("invalid secret key must be rejected")
 	}
 }

@@ -22,13 +22,17 @@ type ServerStore interface {
 // Deps are the API dependencies, injected by the composition root.
 // A nil dependency makes the corresponding endpoints answer 503.
 type Deps struct {
-	Log           *slog.Logger
-	Auth          Authenticator
-	Deployments   *deployment.Service
-	Applications  application.Store
-	Servers       ServerStore
-	EventStream   http.Handler // GET /deployments/{id}/events/stream (SSE, #118)
-	PublicBaseURL string       // optional; used for Location headers
+	Log          *slog.Logger
+	Auth         Authenticator
+	Deployments  *deployment.Service
+	Applications application.Store
+	Servers      ServerStore
+	EventStream  http.Handler // GET /deployments/{id}/events/stream (SSE, #118)
+	GitHub       GitHubConnections
+	// ConsoleURL is where the GitHub callback redirects the browser.
+	ConsoleURL string
+	// SecureCookies sets the Secure attribute on cookies (production).
+	SecureCookies bool
 }
 
 // API serves /api/v1.
@@ -38,6 +42,9 @@ type API struct {
 	deployments  *deployment.Service
 	applications application.Store
 	servers      ServerStore
+	github       GitHubConnections
+	consoleURL   string
+	secure       bool
 	mux          *http.ServeMux
 }
 
@@ -46,7 +53,8 @@ type API struct {
 func New(d Deps) http.Handler {
 	a := &API{
 		log: d.Log, auth: d.Auth, deployments: d.Deployments,
-		applications: d.Applications, servers: d.Servers, mux: http.NewServeMux(),
+		applications: d.Applications, servers: d.Servers, github: d.GitHub,
+		consoleURL: d.ConsoleURL, secure: d.SecureCookies, mux: http.NewServeMux(),
 	}
 	if a.log == nil {
 		a.log = slog.Default()
@@ -58,6 +66,11 @@ func New(d Deps) http.Handler {
 	r := a.mux
 	r.HandleFunc("GET /api/v1/auth/me", a.wrap(a.me))
 	r.HandleFunc("POST /api/v1/auth/logout", a.wrap(a.logout))
+
+	r.HandleFunc("POST /api/v1/github/connections", a.wrap(a.startGitHubConnection))
+	r.HandleFunc("GET /api/v1/github/connections", a.wrap(a.listGitHubConnections))
+	r.HandleFunc("DELETE /api/v1/github/connections/{connectionID}", a.wrap(a.disconnectGitHub))
+	r.HandleFunc("GET "+githubCallbackPath, a.githubCallback) // public: protected by single-use state + browser cookie
 
 	r.HandleFunc("GET /api/v1/applications", a.wrap(a.listApplications))
 	r.HandleFunc("POST /api/v1/applications", a.wrap(a.createApplication))

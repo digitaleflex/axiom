@@ -141,6 +141,10 @@ func (denyAll) Authenticate(*http.Request) (Principal, error) { return Principal
 
 func (a *API) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == githubCallbackPath {
+			next.ServeHTTP(w, r)
+			return
+		}
 		p, err := a.auth.Authenticate(r)
 		if err != nil {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="axiom"`)

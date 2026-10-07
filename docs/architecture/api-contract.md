@@ -103,17 +103,21 @@ Clients must not infer database structure from identifiers.
 
 `POST /api/v1/github/connections`
 
-Creates a GitHub connection through the configured OAuth/App flow.
+Starts the configured OAuth / GitHub App user authorization flow. Response `200 { "authorizeUrl": "https://github.com/login/oauth/authorize?..." }` and an `HttpOnly`, `SameSite=Lax` cookie scoped to the callback path that binds the flow to the browser. The client navigates the browser to `authorizeUrl`. `503 SERVICE_UNAVAILABLE` when GitHub is not configured.
+
+### Callback (browser)
+
+`GET /api/v1/github/callback?code=…&state=…` — public endpoint registered on GitHub. The state is single-use, expires after 10 minutes, is bound to the user who started the flow and to the starting browser; PKCE (S256) protects the code exchange. Always redirects (`302`) to `{AXIOM_CONSOLE_URL}/github?result=connected|denied|error`; never renders tokens.
 
 ### List connections
 
-`GET /api/v1/github/connections`
+`GET /api/v1/github/connections` → `{ "items": [ { "id": "ghc_…", "accountLogin": "octocat", "accountType": "User", "status": "active|needs_attention|disconnected", "scopes": "", "connectedAt": "…", "updatedAt": "…" } ] }`
 
 ### Disconnect
 
-`DELETE /api/v1/github/connections/{connectionId}`
+`DELETE /api/v1/github/connections/{connectionId}` → `204`. Revokes the GitHub grant (best effort) and wipes stored tokens; repository access through this connection fails afterwards.
 
-Tokens are never returned by these endpoints.
+Tokens are never returned by these endpoints. They are stored encrypted (AES-256-GCM, `AXIOM_SECRET_KEY`) and bound to their connection.
 
 ---
 

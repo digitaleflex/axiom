@@ -3,6 +3,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/url"
@@ -38,7 +39,28 @@ type Config struct {
 	// APIToken is the interim bearer token protecting /api/v1 until user
 	// authentication (#125) lands. Required in production; never logged.
 	APIToken string
+	// SecretKey (base64, 32 bytes) encrypts tokens at rest. Required in
+	// production and whenever GitHub is configured. Never logged.
+	SecretKey string
+	GitHub    GitHubConfig
+	// ConsoleURL is where browser flows (GitHub callback) return to.
+	ConsoleURL string
 }
+
+// GitHubConfig configures the OAuth / GitHub App user authorization flow.
+type GitHubConfig struct {
+	ClientID     string
+	ClientSecret string
+	// RedirectURL is the Engine callback URL registered on GitHub,
+	// e.g. https://engine.example.com/api/v1/github/callback.
+	RedirectURL string
+	OAuthURL    string // default https://github.com
+	APIURL      string // default https://api.github.com
+	Scopes      string // space-separated; empty for GitHub Apps
+}
+
+// Enabled reports whether the GitHub connection flow is configured.
+func (g GitHubConfig) Enabled() bool { return g.ClientID != "" }
 
 type DatabaseConfig struct {
 	URL             string
@@ -69,6 +91,16 @@ func LoadFrom(lookup func(string) (string, bool)) (Config, error) {
 		},
 	}
 	cfg.APIToken = r.str("AXIOM_API_TOKEN", "")
+	cfg.SecretKey = r.str("AXIOM_SECRET_KEY", "")
+	cfg.ConsoleURL = strings.TrimRight(r.str("AXIOM_CONSOLE_URL", "http://localhost:5173"), "/")
+	cfg.GitHub = GitHubConfig{
+		ClientID:     r.str("AXIOM_GITHUB_CLIENT_ID", ""),
+		ClientSecret: r.str("AXIOM_GITHUB_CLIENT_SECRET", ""),
+		RedirectURL:  r.str("AXIOM_GITHUB_REDIRECT_URL", ""),
+		OAuthURL:     strings.TrimRight(r.str("AXIOM_GITHUB_OAUTH_URL", "https://github.com"), "/"),
+		APIURL:       strings.TrimRight(r.str("AXIOM_GITHUB_API_URL", "https://api.github.com"), "/"),
+		Scopes:       r.str("AXIOM_GITHUB_SCOPES", ""),
+	}
 	// Production always requires the database; elsewhere it is opt-in.
 	cfg.Database.Required = r.bool("AXIOM_DB_REQUIRED", cfg.Env == EnvProduction)
 
@@ -112,10 +144,44 @@ func (c Config) Validate() error {
 	if c.Env == EnvProduction && len(c.APIToken) < 32 {
 		errs = append(errs, errors.New("AXIOM_API_TOKEN of at least 32 characters is required in production"))
 	}
+	if c.SecretKey != "" && !validKey(c.SecretKey) {
+		errs = append(errs, errors.New("AXIOM_SECRET_KEY must be 32 bytes encoded in base64"))
+	}
+	if c.Env == EnvProduction && c.SecretKey == "" {
+		errs = append(errs, errors.New("AXIOM_SECRET_KEY is required in production"))
+	}
+	if g := c.GitHub; g.ClientID != "" || g.ClientSecret != "" || g.RedirectURL != "" {
+		if g.ClientID == "" || g.ClientSecret == "" || g.RedirectURL == "" {
+			errs = append(errs, errors.New("AXIOM_GITHUB_CLIENT_ID, AXIOM_GITHUB_CLIENT_SECRET and AXIOM_GITHUB_REDIRECT_URL must be set together"))
+		}
+		if !validHTTPURL(g.RedirectURL) || !validHTTPURL(g.OAuthURL) || !validHTTPURL(g.APIURL) {
+			errs = append(errs, errors.New("GitHub URLs must be absolute http(s) URLs"))
+		}
+		if c.SecretKey == "" {
+			errs = append(errs, errors.New("AXIOM_SECRET_KEY is required when GitHub is configured"))
+		}
+	}
+	if !validHTTPURL(c.ConsoleURL) {
+		errs = append(errs, errors.New("AXIOM_CONSOLE_URL must be an absolute http(s) URL"))
+	}
 	if c.Database.MaxIdleConns > c.Database.MaxOpenConns && c.Database.MaxOpenConns > 0 {
 		errs = append(errs, errors.New("AXIOM_DB_MAX_IDLE_CONNS cannot exceed AXIOM_DB_MAX_OPEN_CONNS"))
 	}
 	return errors.Join(errs...)
+}
+
+func validHTTPURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
+func validKey(s string) bool {
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		if k, err := enc.DecodeString(s); err == nil && len(k) == 32 {
+			return true
+		}
+	}
+	return false
 }
 
 // Addr returns the listen address.

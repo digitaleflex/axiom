@@ -21,7 +21,9 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/database"
 	deploymentdb "github.com/digitaleflex/axiom/services/engine/internal/database/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
+	ghauth "github.com/digitaleflex/axiom/services/engine/internal/github/auth"
 	"github.com/digitaleflex/axiom/services/engine/internal/httpserver"
+	"github.com/digitaleflex/axiom/services/engine/internal/security/secrets"
 	"github.com/digitaleflex/axiom/services/engine/migrations"
 )
 
@@ -86,7 +88,7 @@ var localOperator = api.Principal{UserID: "usr_local", Name: "Local operator"}
 // buildAPIDeps wires stores and services. Without a database, data endpoints
 // answer 503 SERVICE_UNAVAILABLE instead of serving in-memory state.
 func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *sql.DB, streams context.Context) (api.Deps, error) {
-	deps := api.Deps{Log: log}
+	deps := api.Deps{Log: log, ConsoleURL: cfg.ConsoleURL, SecureCookies: cfg.Env == config.EnvProduction}
 	switch {
 	case cfg.APIToken != "":
 		deps.Auth = api.NewTokenAuthenticator(cfg.APIToken, localOperator)
@@ -106,6 +108,26 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 	deps.Deployments = deployment.NewService(deploymentdb.New(db), deployment.NewEventBus())
 	deps.EventStream = &sse.Handler{Store: deps.Deployments.Store(), Bus: deps.Deployments.Events(), Log: log, Shutdown: streams}
 	deps.Applications = database.NewApplicationStore(db)
+	if cfg.GitHub.Enabled() {
+		key, err := secrets.ParseKey(cfg.SecretKey)
+		if err != nil {
+			return api.Deps{}, err
+		}
+		box, err := secrets.NewBox(key)
+		if err != nil {
+			return api.Deps{}, err
+		}
+		deps.GitHub = &ghauth.Service{
+			Store: ghauth.PGStore{DB: db},
+			Provider: &ghauth.OAuthProvider{
+				ClientID: cfg.GitHub.ClientID, ClientSecret: cfg.GitHub.ClientSecret, RedirectURL: cfg.GitHub.RedirectURL,
+				OAuthURL: cfg.GitHub.OAuthURL, APIURL: cfg.GitHub.APIURL, Scopes: cfg.GitHub.Scopes,
+			},
+			Box: box, Log: log,
+		}
+	} else {
+		log.Info("GitHub integration disabled: AXIOM_GITHUB_CLIENT_ID not configured")
+	}
 	deps.Servers = database.NewRepositories(db).Servers
 	return deps, nil
 }
