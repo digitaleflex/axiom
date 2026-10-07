@@ -44,3 +44,9 @@ jobs:
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - run: go vet ./...
       - run: go test -race -count=1 ./...
+      - name: end-to-end (engine only)
+        if: matrix.module == 'engine'
+        env:
+          AXIOM_TEST_DOCKER: "1"
+          AXIOM_TEST_E2E: "1"
+        run: go test -count=1 ./internal/e2e/ ./internal/build/
