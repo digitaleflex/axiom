@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/digitaleflex/axiom/services/engine/internal/build"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 )
 
@@ -26,8 +27,8 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 	if e.deployments == nil || e.builder == nil || e.agent == nil {
 		return Result{}, errors.New("deployment service, build runner and runtime agent are required")
 	}
-	if req.DeploymentID == "" || req.Plan.ID == "" || req.Plan.ServerID == "" {
-		return Result{}, errors.New("deploymentID, plan ID and server ID are required")
+	if req.DeploymentID == "" || req.Plan.ID == "" || req.Plan.ServerID == "" || req.Source == nil {
+		return Result{}, errors.New("deploymentID, plan ID, server ID and source are required")
 	}
 	id := req.DeploymentID
 
@@ -37,12 +38,12 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 		}
 	}
 
-	var build BuildResult
+	var built build.Result
 	if err := e.step(ctx, id, "BUILD", func() error {
 		var err error
-		build, err = e.builder.Build(ctx, BuildRequest{
-			DeploymentID: id, Repository: req.Repository, Ref: req.Ref, WorkDir: req.WorkDir,
-			Image: req.Image, Command: req.Plan.Build.Command,
+		built, err = e.builder.Build(ctx, build.Input{
+			DeploymentID: id, ApplicationID: req.Plan.ApplicationID, AppSlug: req.AppSlug,
+			Commit: req.Plan.Source.Commit, Plan: req.Plan, Source: req.Source,
 		})
 		return err
 	}); err != nil {
@@ -57,7 +58,7 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 		run  func() error
 	}{
 		{"CREATE_RUNTIME", func() error {
-			return e.agent.CreateRuntime(ctx, CreateRuntimeRequest{DeploymentID: id, ServerID: req.Plan.ServerID, ImageRef: build.ImageRef, Container: req.Container, Port: req.Plan.Runtime.Port})
+			return e.agent.CreateRuntime(ctx, CreateRuntimeRequest{DeploymentID: id, ServerID: req.Plan.ServerID, ImageRef: built.ImageRef, Container: req.Container, Port: req.Plan.Runtime.Port})
 		}},
 		{"NETWORK", func() error {
 			return e.agent.ConfigureNetwork(ctx, NetworkRequest{DeploymentID: id, ServerID: req.Plan.ServerID, Container: req.Container, Proxy: req.Plan.Network.Proxy, Domain: req.Plan.Network.Domain, TLS: req.Plan.Network.TLS, Port: req.Plan.Network.ExposedPort})
@@ -93,7 +94,7 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{Deployment: record, ImageRef: build.ImageRef, ArtifactID: build.ArtifactID}, nil
+	return Result{Deployment: record, ImageRef: built.ImageRef, ArtifactID: built.ArtifactID, Artifact: built.Artifact}, nil
 }
 
 // step records RUNNING, runs fn, then records COMPLETED or FAILED.

@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 
+	"github.com/digitaleflex/axiom/services/engine/internal/build"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner"
 )
@@ -46,23 +47,9 @@ type HealthCheckRequest struct {
 	TimeoutSeconds int
 }
 
+// BuildRunner builds the deployment image. Implemented by build.Engine.
 type BuildRunner interface {
-	Build(ctx context.Context, req BuildRequest) (BuildResult, error)
-}
-
-type BuildRequest struct {
-	DeploymentID string
-	Repository   string
-	Ref          string
-	WorkDir      string
-	Image        string
-	Command      string
-}
-
-type BuildResult struct {
-	ImageRef   string
-	ArtifactID string
-	ExitCode   int
+	Build(ctx context.Context, in build.Input) (build.Result, error)
 }
 
 type PlanExecutor struct {
@@ -72,18 +59,16 @@ type PlanExecutor struct {
 }
 
 type Request struct {
-	DeploymentID  string
-	ApplicationID string
-	Repository    string
-	Ref           string
-	WorkDir       string
-	Image         string
-	Container     string
-	Plan          planner.Plan
+	DeploymentID string
+	AppSlug      string
+	Container    string
+	Source       build.Source
+	Plan         planner.Plan
 }
 
 type Result struct {
 	Deployment deployment.Record
 	ImageRef   string
 	ArtifactID string
+	Artifact   build.Artifact
 }
