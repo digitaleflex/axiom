@@ -5,6 +5,8 @@ import (
 	"net/http"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
+	ghauth "github.com/digitaleflex/axiom/services/engine/internal/github/auth"
+	"github.com/digitaleflex/axiom/services/engine/internal/github/repos"
 )
 
 // Canonical error codes (docs/architecture/api-contract.md §18).
@@ -69,6 +71,20 @@ func fromDomain(err error) *Error {
 		return newError(http.StatusConflict, CodeConflict, "Idempotency-Key was already used for a different request", nil)
 	case errors.Is(err, deployment.ErrInvalidTransition):
 		return newError(http.StatusConflict, CodeDeploymentInvalidState, "the deployment cannot perform this action in its current state", nil)
+	case errors.Is(err, repos.ErrRefNotFound):
+		return newError(http.StatusNotFound, CodeNotFound, "ref not found", nil)
+	case errors.Is(err, repos.ErrNotFound), errors.Is(err, repos.ErrConnectionAbsent), errors.Is(err, ghauth.ErrNotFound):
+		return newError(http.StatusNotFound, CodeNotFound, "GitHub connection or repository not found", nil)
+	case errors.Is(err, repos.ErrInvalidRef):
+		return newError(http.StatusBadRequest, CodeInvalidRequest, "invalid ref name", nil)
+	case errors.Is(err, repos.ErrReconnectNeeded), errors.Is(err, ghauth.ErrDisconnected), errors.Is(err, ghauth.ErrNeedsAttention):
+		return newError(http.StatusConflict, CodeConflict, "GitHub must be reconnected", map[string]any{"reason": "github_reconnect_required"})
+	case errors.Is(err, repos.ErrForbidden):
+		return newError(http.StatusForbidden, CodeForbidden, "GitHub denied access to this resource", nil)
+	case errors.Is(err, repos.ErrRateLimited):
+		return newError(http.StatusTooManyRequests, CodeRateLimited, "GitHub rate limit reached; retry later", nil)
+	case errors.Is(err, repos.ErrUnavailable), errors.Is(err, ghauth.ErrProvider):
+		return newError(http.StatusServiceUnavailable, CodeServiceUnavailable, "GitHub is unavailable; retry later", nil)
 	case errors.Is(err, deployment.ErrInvalidInput):
 		return newError(http.StatusBadRequest, CodeInvalidRequest, err.Error(), nil)
 	default:

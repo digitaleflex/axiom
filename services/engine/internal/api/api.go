@@ -29,6 +29,7 @@ type Deps struct {
 	Servers      ServerStore
 	EventStream  http.Handler // GET /deployments/{id}/events/stream (SSE, #118)
 	GitHub       GitHubConnections
+	Repositories RepositoryDiscovery
 	// ConsoleURL is where the GitHub callback redirects the browser.
 	ConsoleURL string
 	// SecureCookies sets the Secure attribute on cookies (production).
@@ -43,6 +44,7 @@ type API struct {
 	applications application.Store
 	servers      ServerStore
 	github       GitHubConnections
+	repos        RepositoryDiscovery
 	consoleURL   string
 	secure       bool
 	mux          *http.ServeMux
@@ -53,7 +55,7 @@ type API struct {
 func New(d Deps) http.Handler {
 	a := &API{
 		log: d.Log, auth: d.Auth, deployments: d.Deployments,
-		applications: d.Applications, servers: d.Servers, github: d.GitHub,
+		applications: d.Applications, servers: d.Servers, github: d.GitHub, repos: d.Repositories,
 		consoleURL: d.ConsoleURL, secure: d.SecureCookies, mux: http.NewServeMux(),
 	}
 	if a.log == nil {
@@ -70,6 +72,9 @@ func New(d Deps) http.Handler {
 	r.HandleFunc("POST /api/v1/github/connections", a.wrap(a.startGitHubConnection))
 	r.HandleFunc("GET /api/v1/github/connections", a.wrap(a.listGitHubConnections))
 	r.HandleFunc("DELETE /api/v1/github/connections/{connectionID}", a.wrap(a.disconnectGitHub))
+	r.HandleFunc("GET /api/v1/github/connections/{connectionID}/repositories", a.wrap(a.listRepositories))
+	r.HandleFunc("GET /api/v1/repositories/{repositoryID}", a.wrap(a.getRepository))
+	r.HandleFunc("GET /api/v1/repositories/{repositoryID}/refs", a.wrap(a.listRefs))
 	r.HandleFunc("GET "+githubCallbackPath, a.githubCallback) // public: protected by single-use state + browser cookie
 
 	r.HandleFunc("GET /api/v1/applications", a.wrap(a.listApplications))

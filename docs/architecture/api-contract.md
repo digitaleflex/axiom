@@ -153,13 +153,17 @@ Response:
 }
 ```
 
+Repositories are sorted by `fullName` (case-insensitive); `search` is a case-insensitive substring of `fullName` (≤ 100 chars). IDs (`repo_…`) are stable per connection and GitHub repository (`externalId`). Listing is capped at 1000 repositories per connection; `"truncated": true` signals the cap was reached.
+
 ### Get repository
 
-`GET /api/v1/repositories/{repositoryId}`
+`GET /api/v1/repositories/{repositoryId}` — refreshes metadata from GitHub. Fields: `id`, `connectionId`, `externalId`, `fullName`, `cloneUrl`, `htmlUrl`, `defaultBranch`, `private`, `language` (as reported by GitHub, not Axiom's detection), `pushedAt`.
 
 ### List branches/refs
 
-`GET /api/v1/repositories/{repositoryId}/refs`
+`GET /api/v1/repositories/{repositoryId}/refs` → `{ "items": [ { "name": "main", "type": "branch", "commitSha": "…", "default": true }, { "name": "v1.0.0", "type": "tag", … } ] }` — default branch first, then branches by name, then tags by name.
+
+GitHub errors are normalized: `404 NOT_FOUND` (repository, connection or ref), `409 CONFLICT` with `details.reason = "github_reconnect_required"` (token revoked, disconnected or needs attention), `403 FORBIDDEN`, `429 RATE_LIMITED`, `503 SERVICE_UNAVAILABLE` (GitHub unavailable or timed out).
 
 The selected ref becomes part of the application/deployment source definition.
 

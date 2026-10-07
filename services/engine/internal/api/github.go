@@ -7,6 +7,7 @@ import (
 	"net/url"
 
 	ghauth "github.com/digitaleflex/axiom/services/engine/internal/github/auth"
+	"github.com/digitaleflex/axiom/services/engine/internal/github/repos"
 )
 
 const (
@@ -92,5 +93,58 @@ func (a *API) disconnectGitHub(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+// RepositoryDiscovery is the repository/ref adapter (#92).
+type RepositoryDiscovery interface {
+	ListRepositories(ctx context.Context, userID, connectionID string, page, limit int, search string) (repos.ListResult, error)
+	GetRepository(ctx context.Context, userID, repoID string) (repos.Repository, error)
+	ListRefs(ctx context.Context, userID, repoID string) ([]repos.Ref, error)
+}
+
+func (a *API) listRepositories(w http.ResponseWriter, r *http.Request) error {
+	if a.repos == nil {
+		return newError(http.StatusServiceUnavailable, CodeServiceUnavailable, "GitHub integration is not configured", nil)
+	}
+	p, err := parsePage(r)
+	if err != nil {
+		return err
+	}
+	search := r.URL.Query().Get("search")
+	if len(search) > 100 {
+		return errInvalid("search must be at most 100 characters")
+	}
+	res, err := a.repos.ListRepositories(r.Context(), principal(r.Context()).UserID, r.PathValue("connectionID"), p.Page, p.Limit, search)
+	if err != nil {
+		return err
+	}
+	out := pageResponse(res.Items, p, res.Total)
+	out["truncated"] = res.Truncated
+	writeJSON(w, http.StatusOK, out)
+	return nil
+}
+
+func (a *API) getRepository(w http.ResponseWriter, r *http.Request) error {
+	if a.repos == nil {
+		return newError(http.StatusServiceUnavailable, CodeServiceUnavailable, "GitHub integration is not configured", nil)
+	}
+	repo, err := a.repos.GetRepository(r.Context(), principal(r.Context()).UserID, r.PathValue("repositoryID"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, repo)
+	return nil
+}
+
+func (a *API) listRefs(w http.ResponseWriter, r *http.Request) error {
+	if a.repos == nil {
+		return newError(http.StatusServiceUnavailable, CodeServiceUnavailable, "GitHub integration is not configured", nil)
+	}
+	refs, err := a.repos.ListRefs(r.Context(), principal(r.Context()).UserID, r.PathValue("repositoryID"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": refs})
 	return nil
 }

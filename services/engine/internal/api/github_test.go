@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	ghauth "github.com/digitaleflex/axiom/services/engine/internal/github/auth"
+	"github.com/digitaleflex/axiom/services/engine/internal/github/repos"
 )
 
 type fakeGitHub struct {
@@ -117,5 +118,50 @@ func TestGitHubNotConfigured(t *testing.T) {
 	h.ServeHTTP(rr, httptest.NewRequest("GET", "/api/v1/github/callback?state=x", nil))
 	if rr.Code != 302 || !strings.HasSuffix(rr.Header().Get("Location"), "result=error") {
 		t.Fatalf("callback without GitHub = %d %s", rr.Code, rr.Header().Get("Location"))
+	}
+}
+
+type fakeRepos struct{ err error }
+
+func (f fakeRepos) ListRepositories(_ context.Context, userID, conn string, page, limit int, search string) (repos.ListResult, error) {
+	if f.err != nil {
+		return repos.ListResult{}, f.err
+	}
+	return repos.ListResult{Items: []repos.Repository{{ID: "repo_1", FullName: "acme/web"}}, Total: 1}, nil
+}
+func (f fakeRepos) GetRepository(context.Context, string, string) (repos.Repository, error) {
+	return repos.Repository{}, f.err
+}
+func (f fakeRepos) ListRefs(context.Context, string, string) ([]repos.Ref, error) {
+	return []repos.Ref{{Name: "main", Type: "branch", Default: true}}, f.err
+}
+
+func TestRepositoryRoutesAndErrorMapping(t *testing.T) {
+	newH := func(r RepositoryDiscovery) http.Handler {
+		return New(Deps{Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Auth: DevAuthenticator{Principal: Principal{UserID: "usr_1"}}, Repositories: r})
+	}
+	get := func(h http.Handler, path string) *httptest.ResponseRecorder {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest("GET", path, nil))
+		return rr
+	}
+	h := newH(fakeRepos{})
+	if rr := get(h, "/api/v1/github/connections/ghc_1/repositories?search=web"); rr.Code != 200 || !strings.Contains(rr.Body.String(), `"truncated":false`) {
+		t.Fatalf("list = %d %s", rr.Code, rr.Body.String())
+	}
+	if rr := get(h, "/api/v1/repositories/repo_1/refs"); rr.Code != 200 {
+		t.Fatalf("refs = %d", rr.Code)
+	}
+	if rr := get(h, "/api/v1/github/connections/ghc_1/repositories?search="+strings.Repeat("x", 101)); rr.Code != 400 {
+		t.Fatalf("long search = %d", rr.Code)
+	}
+	cases := map[error]int{
+		repos.ErrNotFound: 404, repos.ErrRefNotFound: 404, repos.ErrReconnectNeeded: 409, ghauth.ErrDisconnected: 409,
+		repos.ErrForbidden: 403, repos.ErrRateLimited: 429, repos.ErrUnavailable: 503, repos.ErrInvalidRef: 400,
+	}
+	for err, code := range cases {
+		if rr := get(newH(fakeRepos{err: err}), "/api/v1/github/connections/ghc_1/repositories"); rr.Code != code {
+			t.Errorf("%v -> %d, want %d", err, rr.Code, code)
+		}
 	}
 }

@@ -22,6 +22,7 @@ import (
 	deploymentdb "github.com/digitaleflex/axiom/services/engine/internal/database/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 	ghauth "github.com/digitaleflex/axiom/services/engine/internal/github/auth"
+	"github.com/digitaleflex/axiom/services/engine/internal/github/repos"
 	"github.com/digitaleflex/axiom/services/engine/internal/httpserver"
 	"github.com/digitaleflex/axiom/services/engine/internal/security/secrets"
 	"github.com/digitaleflex/axiom/services/engine/migrations"
@@ -117,7 +118,7 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 		if err != nil {
 			return api.Deps{}, err
 		}
-		deps.GitHub = &ghauth.Service{
+		ghService := &ghauth.Service{
 			Store: ghauth.PGStore{DB: db},
 			Provider: &ghauth.OAuthProvider{
 				ClientID: cfg.GitHub.ClientID, ClientSecret: cfg.GitHub.ClientSecret, RedirectURL: cfg.GitHub.RedirectURL,
@@ -125,6 +126,8 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 			},
 			Box: box, Log: log,
 		}
+		deps.GitHub = ghService
+		deps.Repositories = &repos.Service{Tokens: ghService, Store: repos.PGStore{DB: db}, APIURL: cfg.GitHub.APIURL}
 	} else {
 		log.Info("GitHub integration disabled: AXIOM_GITHUB_CLIENT_ID not configured")
 	}
