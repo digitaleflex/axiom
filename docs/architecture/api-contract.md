@@ -510,10 +510,22 @@ Example:
 
 Query parameters:
 
-- `step`
-- `level`
-- `cursor`
-- `limit`
+- `step` (`BUILD`, `CREATE_RUNTIME`, `NETWORK`, `START`, `VERIFY`)
+- `level` (minimum severity: `debug`, `info`, `warn`, `error`)
+- `source` (`build`, `deploy`, `runtime`)
+- `q` (case-insensitive substring search)
+- `cursor` (last log ID of the previous page; keyset-ordered by time)
+- `limit` (default 100, max 1000)
+
+Response:
+
+```json
+{ "items": [ { "id": "log_…", "deploymentId": "dep_123", "occurredAt": "…",
+  "level": "ERROR", "step": "VERIFY", "source": "runtime", "message": "…" } ],
+  "nextCursor": "log_…" }
+```
+
+`nextCursor` is absent on the last page. Logs are durable (survive Engine restart), bounded to the last 10 000 lines per deployment, and redacted **before** persistence: tokens, passwords, private keys and URL credentials are stored as `[REDACTED]`, never in clear.
 
 ### Deployment events
 
@@ -527,7 +539,7 @@ Returns persisted events ordered by `seq` (strictly increasing per deployment, s
   "nextAfter": null }
 ```
 
-Event types: `deployment.created`, `deployment.status.changed`, `deployment.step.started`, `deployment.step.completed`, `deployment.step.failed`, `deployment.step.skipped`.
+Event types: `deployment.created`, `deployment.status.changed`, `deployment.step.started`, `deployment.step.completed`, `deployment.step.failed`, `deployment.step.skipped`, `health.passed`, `health.failed`.
 
 Events include:
 
