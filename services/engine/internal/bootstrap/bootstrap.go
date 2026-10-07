@@ -27,6 +27,7 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/httpserver"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner"
 	"github.com/digitaleflex/axiom/services/engine/internal/security/secrets"
+	"github.com/digitaleflex/axiom/services/engine/internal/server"
 	"github.com/digitaleflex/axiom/services/engine/migrations"
 )
 
@@ -111,7 +112,7 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 	deps.Deployments = deployment.NewService(deploymentdb.New(db), deployment.NewEventBus())
 	deps.EventStream = &sse.Handler{Store: deps.Deployments.Store(), Bus: deps.Deployments.Events(), Log: log, Shutdown: streams}
 	deps.Applications = database.NewApplicationStore(db)
-	deps.Servers = database.NewRepositories(db).Servers
+	deps.Servers = server.NewService(database.NewRepositories(db).Servers)
 	deps.Plans = &planner.Service{Engine: planner.New(), Profiles: analysis.PGStore{DB: db}, Servers: deps.Servers, DB: db, NewID: deployment.NewID}
 	if cfg.GitHub.Enabled() {
 		key, err := secrets.ParseKey(cfg.SecretKey)

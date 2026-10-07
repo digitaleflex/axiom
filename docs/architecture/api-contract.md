@@ -293,7 +293,9 @@ The profile is versioned and traceable to an analysis (`analysisId`, `source.com
 
 ### List servers
 
-`GET /api/v1/servers`
+`GET /api/v1/servers?status={ready|degraded|offline|pending|revoked|unknown}`
+
+`status` is optional. Reported `status` is the *effective* status: a ready or degraded server whose heartbeat is older than 5 minutes reads as `offline` (unknown freshness is never assumed dead).
 
 ### Get server
 
@@ -303,13 +305,25 @@ The profile is versioned and traceable to an analysis (`analysisId`, `source.com
 
 `POST /api/v1/servers`
 
-The registration flow must establish the Runtime Agent trust boundary.
+```json
+{ "name": "srv-eu-1", "address": "203.0.113.10" }
+```
+
+`name` is a lowercase slug (1–63 chars); `address` is `host` or `host:port` without scheme. Response `201 Created` (`Location: /api/v1/servers/{id}`) with the record in `pending` status. The Runtime Agent binds to the record during registration (#76), which establishes the trust boundary; the record alone grants nothing.
+
+### Rename server
+
+`PATCH /api/v1/servers/{serverId}` — `{ "name": "srv-eu-2" }`.
+
+### Remove server
+
+`DELETE /api/v1/servers/{serverId}` → `204`. Refused with `409 CONFLICT` (`details.reason = "server_in_use"`) while active (non-FAILED/CANCELLED) deployments reference it, or `"server_has_history"` while plans or past deployments reference it.
 
 ### Server status
 
 `GET /api/v1/servers/{serverId}/health`
 
-A server is eligible for deployment only when its Agent, Docker/runtime capabilities and health satisfy the Deployment Plan requirements.
+A server is eligible for deployment only when its effective status is ready (degraded proceeds with explicit acknowledgement in the Console) and its capabilities satisfy the plan: `docker` always, `docker_compose` for Compose presets, `traefik` when a domain is served. The executor re-verifies eligibility after planning and before building; a server that went offline in between fails the deployment with `DEPLOYMENT_NOT_ELIGIBLE` before any work runs.
 
 ---
 

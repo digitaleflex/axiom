@@ -10,6 +10,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/database"
+	"github.com/digitaleflex/axiom/services/engine/internal/server"
 	"github.com/digitaleflex/axiom/services/engine/migrations"
 )
 
@@ -54,7 +55,7 @@ func TestPostgreSQLPersistence(t *testing.T) {
 	if err := repos.Applications.Create(ctx, ids.application, ids.repository, "example"); err != nil {
 		t.Fatalf("create application: %v", err)
 	}
-	if err := repos.Servers.Create(ctx, ids.server, "local-test", "127.0.0.1"); err != nil {
+	if err := repos.Servers.Create(ctx, server.Record{ID: ids.server, Name: "local-test", Address: "127.0.0.1", Status: server.StatusReady}); err != nil {
 		t.Fatalf("create server: %v", err)
 	}
 	user, err := repos.Users.Get(ctx, ids.user)

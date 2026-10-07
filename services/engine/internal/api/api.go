@@ -13,11 +13,17 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
 )
 
-// ServerStore is the read model for servers.
-type ServerStore interface {
+// Servers manages server records: registration, reads, rename and removal.
+type Servers interface {
+	Register(ctx context.Context, ownerID, name, address string) (server.Record, error)
 	Get(ctx context.Context, id string) (server.Record, error)
-	List(ctx context.Context, limit, offset int) ([]server.Record, int, error)
+	Rename(ctx context.Context, id, name string) (server.Record, error)
+	Remove(ctx context.Context, id string) error
+	ListFiltered(ctx context.Context, status string, limit, offset int) ([]server.Record, int, error)
 }
+
+// ServerStore is the read model for servers.
+type ServerStore = Servers
 
 // Deps are the API dependencies, injected by the composition root.
 // A nil dependency makes the corresponding endpoints answer 503.
@@ -93,8 +99,11 @@ func New(d Deps) http.Handler {
 	r.HandleFunc("POST /api/v1/applications/{applicationID}/deployment-plans", a.wrap(a.createPlan))
 	r.HandleFunc("GET /api/v1/deployment-plans/{planID}", a.wrap(a.getPlan))
 
+	r.HandleFunc("POST /api/v1/servers", a.wrap(a.registerServer))
 	r.HandleFunc("GET /api/v1/servers", a.wrap(a.listServers))
 	r.HandleFunc("GET /api/v1/servers/{serverID}", a.wrap(a.getServer))
+	r.HandleFunc("PATCH /api/v1/servers/{serverID}", a.wrap(a.renameServer))
+	r.HandleFunc("DELETE /api/v1/servers/{serverID}", a.wrap(a.removeServer))
 	r.HandleFunc("GET /api/v1/servers/{serverID}/health", a.wrap(a.serverHealth))
 
 	r.HandleFunc("POST /api/v1/applications/{applicationID}/deployments", a.wrap(a.createDeployment))

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/application"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
@@ -121,7 +122,7 @@ type serverDTO struct {
 }
 
 func toServerDTO(s server.Record) serverDTO {
-	d := serverDTO{ID: s.ID, Name: s.Name, Address: s.Address, Status: strings.ToUpper(string(s.Status)), AgentVersion: s.AgentVersion, LastSeenAt: s.LastSeenAt}
+	d := serverDTO{ID: s.ID, Name: s.Name, Address: s.Address, Status: strings.ToUpper(string(server.EffectiveStatusAt(s, time.Now().UTC()))), AgentVersion: s.AgentVersion, LastSeenAt: s.LastSeenAt}
 	d.Capabilities = make([]string, 0, len(s.Capabilities))
 	for _, c := range s.Capabilities {
 		d.Capabilities = append(d.Capabilities, string(c))
@@ -138,7 +139,13 @@ func (a *API) listServers(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	items, total, err := a.servers.List(r.Context(), p.Limit, p.offset())
+	status := r.URL.Query().Get("status")
+	switch status {
+	case "", "pending", "ready", "degraded", "offline", "revoked", "unknown":
+	default:
+		return errInvalid("status must be pending, ready, degraded, offline, revoked or unknown")
+	}
+	items, total, err := a.servers.ListFiltered(r.Context(), status, p.Limit, p.offset())
 	if err != nil {
 		return err
 	}
@@ -168,6 +175,56 @@ func (a *API) getServer(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	writeJSON(w, http.StatusOK, toServerDTO(s))
+	return nil
+}
+
+func (a *API) registerServer(w http.ResponseWriter, r *http.Request) error {
+	if a.servers == nil {
+		return errUnavailable
+	}
+	var in struct {
+		Name    string `json:"name"`
+		Address string `json:"address"`
+	}
+	if err := decodeJSON(w, r, &in); err != nil {
+		return err
+	}
+	rec, err := a.servers.Register(r.Context(), principal(r.Context()).UserID, in.Name, in.Address)
+	if err != nil {
+		return err
+	}
+	w.Header().Set("Location", "/api/v1/servers/"+rec.ID)
+	writeJSON(w, http.StatusCreated, toServerDTO(rec))
+	return nil
+}
+
+func (a *API) renameServer(w http.ResponseWriter, r *http.Request) error {
+	if a.servers == nil {
+		return errUnavailable
+	}
+	var in struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(w, r, &in); err != nil {
+		return err
+	}
+	rec, err := a.servers.Rename(r.Context(), r.PathValue("serverID"), in.Name)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, toServerDTO(rec))
+	return nil
+}
+
+func (a *API) removeServer(w http.ResponseWriter, r *http.Request) error {
+	if a.servers == nil {
+		return errUnavailable
+	}
+	id := r.PathValue("serverID")
+	if err := a.servers.Remove(r.Context(), id); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
 	return nil
 }
 

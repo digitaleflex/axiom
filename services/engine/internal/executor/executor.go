@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/build"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner"
+	"github.com/digitaleflex/axiom/services/engine/internal/server"
 )
 
 // Error codes recorded on failure (docs/architecture/api-contract.md §18).
@@ -17,6 +19,7 @@ const (
 	ErrorBuildFailed       = "BUILD_FAILED"
 	ErrorRuntimeFailed     = "RUNTIME_FAILED"
 	ErrorHealthCheckFailed = "HEALTH_CHECK_FAILED"
+	ErrorNotEligible       = "DEPLOYMENT_NOT_ELIGIBLE"
 )
 
 // Step timeouts. VERIFY is computed from the plan health policy; the rest are
@@ -60,10 +63,25 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 	}
 	log := e.log().With("deploymentId", id, "correlationId", corr)
 
-	for _, s := range []deployment.State{deployment.StateAnalyzing, deployment.StatePlanning, deployment.StateBuilding} {
+	for _, s := range []deployment.State{deployment.StateAnalyzing, deployment.StatePlanning} {
 		if _, err := e.deployments.Transition(ctx, id, s); err != nil {
 			return Result{}, err
 		}
+	}
+
+	// Eligibility pre-flight: the server may have changed since plan review.
+	if e.Servers != nil {
+		if err := e.checkServer(ctx, req.Plan); err != nil {
+			// Record the failure before failing so the deployment explains itself.
+			if _, terr := e.deployments.Transition(ctx, id, deployment.StateBuilding); terr == nil {
+				return e.fail(ctx, id, ErrorNotEligible, err)
+			}
+			return e.fail(ctx, id, ErrorNotEligible, err)
+		}
+	}
+
+	if _, err := e.deployments.Transition(ctx, id, deployment.StateBuilding); err != nil {
+		return Result{}, err
 	}
 
 	var built build.Result
@@ -132,6 +150,36 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 		return Result{}, err
 	}
 	return Result{Deployment: record, ImageRef: built.ImageRef, ArtifactID: built.ArtifactID, Artifact: built.Artifact}, nil
+}
+
+// checkServer re-verifies that the plan target can receive this deployment.
+func (e *PlanExecutor) checkServer(ctx context.Context, plan planner.Plan) error {
+	rec, err := e.Servers.Get(ctx, plan.ServerID)
+	if err != nil {
+		return fmt.Errorf("server %s unavailable: %w", plan.ServerID, err)
+	}
+	if st := server.EffectiveStatusAt(rec, time.Now().UTC()); st != server.StatusReady && st != server.StatusDegraded {
+		return fmt.Errorf("server %s is %s", rec.ID, st)
+	}
+	var missing []string
+	for _, c := range server.RequiredCapabilities(plan.Strategy, plan.Network.Domain != "") {
+		if !hasServerCapability(rec.Capabilities, c) {
+			missing = append(missing, string(c))
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("server %s lacks capabilities: %s", rec.ID, strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+func hasServerCapability(caps []server.Capability, want server.Capability) bool {
+	for _, c := range caps {
+		if c == want {
+			return true
+		}
+	}
+	return false
 }
 
 // newOperation builds the envelope for one attempt of a step. The operation

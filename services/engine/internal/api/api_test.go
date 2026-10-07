@@ -78,15 +78,56 @@ func (f fakeServers) Get(_ context.Context, id string) (server.Record, error) {
 	}
 	return server.Record{}, server.ErrNotFound
 }
-func (f fakeServers) List(_ context.Context, limit, offset int) ([]server.Record, int, error) {
+func (f *fakeServers) Register(_ context.Context, owner, name, address string) (server.Record, error) {
+	if !server.ValidName(name) {
+		return server.Record{}, server.ErrInvalidName
+	}
+	if !server.ValidAddress(address) {
+		return server.Record{}, server.ErrInvalidAddress
+	}
+	s := server.Record{ID: "srv_new", Name: name, Address: address, OwnerID: owner, Status: server.StatusPending}
+	f.items = append(f.items, s)
+	return s, nil
+}
+func (f *fakeServers) Rename(_ context.Context, id, name string) (server.Record, error) {
+	if !server.ValidName(name) {
+		return server.Record{}, server.ErrInvalidName
+	}
+	for i, s := range f.items {
+		if s.ID == id {
+			f.items[i].Name = name
+			return f.items[i], nil
+		}
+	}
+	return server.Record{}, server.ErrNotFound
+}
+func (f *fakeServers) Remove(_ context.Context, id string) error {
+	for i, s := range f.items {
+		if s.ID == id {
+			if id == "srv_1" {
+				return server.ErrInUse
+			}
+			f.items = append(f.items[:i], f.items[i+1:]...)
+			return nil
+		}
+	}
+	return server.ErrNotFound
+}
+func (f *fakeServers) ListFiltered(_ context.Context, status string, limit, offset int) ([]server.Record, int, error) {
+	var items []server.Record
+	for _, s := range f.items {
+		if status == "" || string(s.Status) == status {
+			items = append(items, s)
+		}
+	}
 	end := offset + limit
-	if end > len(f.items) {
-		end = len(f.items)
+	if end > len(items) {
+		end = len(items)
 	}
 	if offset > end {
 		offset = end
 	}
-	return f.items[offset:end], len(f.items), nil
+	return items[offset:end], len(items), nil
 }
 
 // --- harness ------------------------------------------------------------------
@@ -110,7 +151,7 @@ func newHarness(t *testing.T) *harness {
 		"app_1":     {ID: "app_1", Name: "acme-web", RepositoryID: "repo_1", OwnerID: "usr_1"},
 		"app_other": {ID: "app_other", Name: "other", RepositoryID: "repo_2", OwnerID: "usr_2"},
 	}}
-	servers := fakeServers{items: []server.Record{
+	servers := &fakeServers{items: []server.Record{
 		{ID: "srv_1", Name: "srv-eu-1", Address: "203.0.113.10", Status: server.StatusReady, AgentVersion: "0.1.3", Capabilities: []server.Capability{server.CapabilityDocker}, CPUCount: 4, MemoryMB: 8192, DiskFreeMB: 50000},
 		{ID: "srv_2", Name: "srv-eu-2", Status: server.StatusOffline},
 	}}
@@ -255,6 +296,29 @@ func TestServers(t *testing.T) {
 	}
 	expect(t, h.do("GET", "/api/v1/servers/srv_2/health", nil, nil), 200, "")
 	expect(t, h.do("GET", "/api/v1/servers/srv_x", nil, nil), 404, CodeNotFound)
+	expect(t, h.do("GET", "/api/v1/servers?status=ready", nil, nil), 200, "")
+	expect(t, h.do("GET", "/api/v1/servers?status=bogus", nil, nil), 400, CodeInvalidRequest)
+
+	r = h.do("POST", "/api/v1/servers", map[string]any{"name": "srv-eu-3", "address": "203.0.113.12"}, nil)
+	expect(t, r, 201, "")
+	if r.body["id"] != "srv_new" || r.body["status"] != "PENDING" || r.hdr.Get("Location") != "/api/v1/servers/srv_new" {
+		t.Fatalf("register = %v", r.body)
+	}
+	expect(t, h.do("POST", "/api/v1/servers", map[string]any{"name": "Bad Name", "address": "h"}, nil), 422, CodeValidationFailed)
+	expect(t, h.do("POST", "/api/v1/servers", map[string]any{"name": "ok", "address": "http://h/"}, nil), 422, CodeValidationFailed)
+	expect(t, h.do("POST", "/api/v1/servers", map[string]any{"name": "ok"}, nil), 422, CodeValidationFailed)
+
+	r = h.do("PATCH", "/api/v1/servers/srv_new", map[string]any{"name": "srv-eu-4"}, nil)
+	expect(t, r, 200, "")
+	if r.body["name"] != "srv-eu-4" {
+		t.Fatalf("rename = %v", r.body)
+	}
+	expect(t, h.do("PATCH", "/api/v1/servers/srv_new", map[string]any{"name": "bad name"}, nil), 422, CodeValidationFailed)
+	expect(t, h.do("PATCH", "/api/v1/servers/srv_x", map[string]any{"name": "srv-9"}, nil), 404, CodeNotFound)
+
+	expect(t, h.do("DELETE", "/api/v1/servers/srv_1", nil, nil), 409, CodeConflict) // in use (fake)
+	expect(t, h.do("DELETE", "/api/v1/servers/srv_new", nil, nil), 204, "")
+	expect(t, h.do("DELETE", "/api/v1/servers/srv_x", nil, nil), 404, CodeNotFound)
 }
 
 func TestDeploymentLifecycle(t *testing.T) {

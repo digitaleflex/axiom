@@ -65,9 +65,46 @@ func (r ApplicationRepository) Create(ctx context.Context, id, repositoryID, nam
 	return wrap("create application", err)
 }
 
-func (r ServerRepository) Create(ctx context.Context, id, name, address string) error {
-	_, err := r.db.ExecContext(ctx, `INSERT INTO servers (id, name, address) VALUES ($1, $2, $3)`, id, name, address)
+func (r ServerRepository) Create(ctx context.Context, s server.Record) error {
+	var owner any
+	if s.OwnerID != "" {
+		owner = s.OwnerID
+	}
+	_, err := r.db.ExecContext(ctx, `INSERT INTO servers (id, name, address, owner_id, status) VALUES ($1, $2, $3, $4, $5)`,
+		s.ID, s.Name, s.Address, owner, s.Status)
 	return wrap("create server", err)
+}
+
+func (r ServerRepository) Rename(ctx context.Context, id, name string) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE servers SET name = $2 WHERE id = $1`, id, name)
+	if err != nil {
+		return wrap("rename server", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return server.ErrNotFound
+	}
+	return nil
+}
+
+func (r ServerRepository) Delete(ctx context.Context, id string) error {
+	res, err := r.db.ExecContext(ctx, `DELETE FROM servers WHERE id = $1`, id)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return server.ErrHasHistory
+		}
+		return wrap("delete server", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return server.ErrNotFound
+	}
+	return nil
+}
+
+func (r ServerRepository) ActiveDeployments(ctx context.Context, serverID string) (int, error) {
+	var n int
+	err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM deployments WHERE server_id = $1 AND status NOT IN ('FAILED', 'CANCELLED')`, serverID).Scan(&n)
+	return n, wrap("count server deployments", err)
 }
 
 func (r ServerRepository) Get(ctx context.Context, id string) (server.Record, error) {
@@ -192,11 +229,16 @@ func (s ApplicationStore) List(ctx context.Context, ownerID string, limit, offse
 
 // List returns servers ordered by name.
 func (r ServerRepository) List(ctx context.Context, limit, offset int) ([]server.Record, int, error) {
+	return r.ListFiltered(ctx, "", limit, offset)
+}
+
+// ListFiltered lists servers, optionally filtered by status.
+func (r ServerRepository) ListFiltered(ctx context.Context, status string, limit, offset int) ([]server.Record, int, error) {
 	var total int
-	if err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM servers`).Scan(&total); err != nil {
+	if err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM servers WHERE ($1 = '' OR status = $1)`, status).Scan(&total); err != nil {
 		return nil, 0, wrap("count servers", err)
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id FROM servers ORDER BY name, id LIMIT $1 OFFSET $2`, limit, offset)
+	rows, err := r.db.QueryContext(ctx, `SELECT id FROM servers WHERE ($1 = '' OR status = $1) ORDER BY name, id LIMIT $2 OFFSET $3`, status, limit, offset)
 	if err != nil {
 		return nil, 0, wrap("list servers", err)
 	}

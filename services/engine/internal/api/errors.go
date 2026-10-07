@@ -94,6 +94,14 @@ func fromDomain(err error) *Error {
 		return newError(http.StatusServiceUnavailable, CodeServiceUnavailable, "GitHub is unavailable; retry later", nil)
 	case errors.Is(err, server.ErrNotFound):
 		return newError(http.StatusNotFound, CodeNotFound, "server not found", nil)
+	case errors.Is(err, server.ErrInUse):
+		return newError(http.StatusConflict, CodeConflict, "server still hosts active deployments", map[string]any{"reason": "server_in_use"})
+	case errors.Is(err, server.ErrHasHistory):
+		return newError(http.StatusConflict, CodeConflict, "server has deployment history and cannot be removed", map[string]any{"reason": "server_has_history"})
+	case errors.Is(err, server.ErrInvalidName):
+		return errValidation("invalid server", map[string]any{"fields": map[string]any{"name": "must be 1-63 lowercase letters, digits or hyphens"}})
+	case errors.Is(err, server.ErrInvalidAddress):
+		return errValidation("invalid server", map[string]any{"fields": map[string]any{"address": "must be host or host:port without scheme"}})
 	case errors.Is(err, deployment.ErrInvalidInput):
 		return newError(http.StatusBadRequest, CodeInvalidRequest, err.Error(), nil)
 	default:

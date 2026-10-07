@@ -40,10 +40,32 @@ func (s *Service) UpdateHealth(ctx context.Context, id string, health Health) er
 	return s.repo.UpdateHealth(ctx, id, health)
 }
 
+// ListFiltered lists servers, optionally filtered by status.
+func (s *Service) ListFiltered(ctx context.Context, status string, limit, offset int) ([]Record, int, error) {
+	if s == nil || s.repo == nil {
+		return nil, 0, fmt.Errorf("server repository is required")
+	}
+	return s.repo.ListFiltered(ctx, status, limit, offset)
+}
+
+// ActiveDeployments counts deployments on the server that still need it.
+func (s *Service) ActiveDeployments(ctx context.Context, id string) (int, error) {
+	if s == nil || s.repo == nil {
+		return 0, fmt.Errorf("server repository is required")
+	}
+	return s.repo.ActiveDeployments(ctx, id)
+}
+
 func (s *Service) CheckEligibility(record Record, req EligibilityRequest) EligibilityResult {
+	return s.CheckEligibilityAt(record, req, time.Now().UTC())
+}
+
+// CheckEligibilityAt evaluates eligibility against the effective status:
+// stale ready/degraded servers read as offline.
+func (s *Service) CheckEligibilityAt(record Record, req EligibilityRequest, now time.Time) EligibilityResult {
 	result := EligibilityResult{Eligible: true}
 
-	if record.Status != StatusReady {
+	if EffectiveStatusAt(record, now) != StatusReady {
 		result.Eligible = false
 		result.Reasons = append(result.Reasons, "server is not ready")
 	}

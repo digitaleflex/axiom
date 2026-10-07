@@ -8,6 +8,7 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/build"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner"
+	"github.com/digitaleflex/axiom/services/engine/internal/server"
 )
 
 type RuntimeAgent interface {
@@ -60,10 +61,18 @@ type BuildRunner interface {
 	Build(ctx context.Context, in build.Input) (build.Result, error)
 }
 
+// ServerChecker reports the current server state. When set, the executor
+// re-verifies eligibility after planning and before building, so a server
+// that went offline between plan review and execution cannot receive work.
+type ServerChecker interface {
+	Get(ctx context.Context, id string) (server.Record, error)
+}
+
 type PlanExecutor struct {
 	deployments *deployment.Service
 	builder     BuildRunner
 	agent       RuntimeAgent
+	Servers     ServerChecker
 	// Log receives step retry and execution events (structured, no secrets).
 	Log *slog.Logger
 	// Backoff waits between attempts; nil disables waiting.
