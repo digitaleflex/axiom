@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/config"
+	"github.com/digitaleflex/axiom/services/engine/internal/observability/metrics"
 )
 
 type healthResponse struct {
@@ -18,15 +19,32 @@ type healthResponse struct {
 	Version string `json:"version"`
 }
 
-// Handler serves /health, /ready and delegates everything else to api.
+// Handler serves /health, /ready, /metrics and delegates everything else to api.
 type Handler struct {
 	mux      *http.ServeMux
 	draining atomic.Bool
+	metrics  *metrics.Registry
+}
+
+// Option customizes the root handler.
+type Option func(*Handler)
+
+// WithMetrics makes the handler serve the given registry at GET /metrics.
+// Without it, an empty registry is served (valid, just no series).
+func WithMetrics(registry *metrics.Registry) Option {
+	return func(h *Handler) {
+		if registry != nil {
+			h.metrics = registry
+		}
+	}
 }
 
 // NewHandler builds the root handler. db may be nil when the database is optional.
-func NewHandler(cfg config.Config, db *sql.DB, api http.Handler) *Handler {
-	h := &Handler{mux: http.NewServeMux()}
+func NewHandler(cfg config.Config, db *sql.DB, api http.Handler, opts ...Option) *Handler {
+	h := &Handler{mux: http.NewServeMux(), metrics: metrics.NewRegistry()}
+	for _, opt := range opts {
+		opt(h)
+	}
 
 	// Liveness only: the process is up.
 	h.mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
@@ -53,6 +71,9 @@ func NewHandler(cfg config.Config, db *sql.DB, api http.Handler) *Handler {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
+
+	// Metrics: Prometheus text exposition (issue #103, ADR-0006).
+	h.mux.Handle("GET /metrics", metrics.Handler(h.metrics))
 
 	if api != nil {
 		h.mux.Handle("/", api)
