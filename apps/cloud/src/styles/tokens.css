@@ -1,0 +1,96 @@
+/*
+ * Axiom design tokens.
+ *
+ * VERBATIM COPY of docs/design/tokens/axiom.css (source of truth, READ-ONLY).
+ * Do not add colors here. Any token change must land in docs/design/tokens/axiom.css
+ * first, then be re-copied. The build is self-contained on purpose: the frontend
+ * tree (apps/cloud/**) must not import from outside its own directory.
+ *
+ * See docs/design/handoff/README.md §6.6: no hard-coded hex outside tokens/axiom.css.
+ */
+:root {
+  --axiom-accent: #C5F441;
+  --axiom-accent-strong: #D5FF63;
+  --axiom-accent-muted: rgba(197, 244, 65, 0.14);
+  --axiom-accent-focus: rgba(197, 244, 65, 0.32);
+
+  --surface-0: #080A0C;
+  --surface-1: #0D1013;
+  --surface-2: #12161A;
+  --surface-3: #171C21;
+  --surface-inset: #07090B;
+
+  --text-primary: #F3F5F7;
+  --text-secondary: #A8B0B8;
+  --text-tertiary: #747E88;
+  --text-disabled: #4E565E;
+
+  --border-subtle: rgba(255,255,255,.07);
+  --border-default: rgba(255,255,255,.11);
+  --border-strong: rgba(255,255,255,.17);
+
+  --status-live: #35D07F;
+  --status-building: #F5B942;
+  --status-queued: #5EA7FF;
+  --status-failed: #F05252;
+  --status-inactive: #7C858F;
+  --status-warning: #F59E4A;
+
+  --text-xs: .6875rem;
+  --text-sm: .8125rem;
+  --text-md: .875rem;
+  --text-lg: 1rem;
+  --text-xl: 1.125rem;
+  --text-2xl: 1.375rem;
+  --text-3xl: 1.75rem;
+  --text-4xl: 2.25rem;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.22);
+  --shadow-md: 0 8px 24px rgba(0,0,0,.28);
+  --shadow-lg: 0 16px 48px rgba(0,0,0,.34);
+
+  /* v1.0.1 accessibility amendment — #140, see docs/design/accessibility/README.md §1.4 */
+  --border-control: #6B747D;          /* ≥3:1 boundary for interactive controls (A3) */
+  --focus-ring-color: var(--axiom-accent); /* solid focus indicator, ≥13:1 on all surfaces (A2) */
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --on-accent: var(--surface-0);      /* text on --axiom-accent fills */
+  --on-status: var(--surface-0);      /* text on --status-* fills, e.g. destructive buttons (A4) */
+}
+
+/*
+ * Shell-local LAYOUT constants (docs/design/handoff/shell/README.md §3).
+ * These express geometry only and must never be used to express semantics.
+ * Breakpoints come from docs/design/responsive/README.md.
+ */
+:root {
+  --shell-sidebar-width: 240px;
+  --shell-sidebar-rail-width: 64px;
+  --shell-contextbar-height: 48px;
+  --shell-drawer-width: 400px;
+  --shell-activity-width: 400px;
+
+  --bp-md: 768px;
+  --bp-lg: 1024px;
+  --bp-xl: 1280px;
+
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
