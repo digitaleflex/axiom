@@ -517,6 +517,14 @@ event: deployment.status.changed
 data: {"deploymentId":"dep_123","status":"LIVE","url":"https://app.example.com"}
 ```
 
+Stream semantics (implemented, #118):
+
+- Each frame carries `id: <seq>` (the event's per-deployment sequence), `event: <type>` and `data: <event envelope JSON>`.
+- On connect the Engine replays persisted events after `Last-Event-ID` (header, sent automatically by browsers on reconnect) or the `lastEventId` query parameter, then continues live — in order, without duplicates or gaps.
+- `retry: 3000` is advertised; `: ping` comment frames are sent every 15 s.
+- The stream ends after the terminal status event (`LIVE`, `FAILED`, `CANCELLED`), on client disconnect, or on Engine shutdown. Reconnecting after the terminal event returns an empty stream that closes immediately.
+- Invalid `Last-Event-ID` → `400`; unknown or inaccessible deployment → `404`.
+
 SSE is intentionally selected for V0.1 because the primary realtime requirement is server → client deployment progress. A bidirectional WebSocket protocol may be introduced later if product requirements justify it.
 
 ---

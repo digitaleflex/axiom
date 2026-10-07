@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"sync"
@@ -178,6 +179,11 @@ func (m *MemoryStore) Events(_ context.Context, id string, afterSeq int64, limit
 }
 
 func (m *MemoryStore) appendLocked(id, typ string, data map[string]any) Event {
+	// Round-trip through JSON so events have the same shape as persisted ones.
+	if raw, err := json.Marshal(data); err == nil {
+		data = map[string]any{}
+		_ = json.Unmarshal(raw, &data)
+	}
 	ev := Event{ID: NewID("evt"), Seq: int64(len(m.events[id]) + 1), Type: typ, Version: 1, DeploymentID: id, OccurredAt: m.now(), Data: data}
 	m.events[id] = append(m.events[id], ev)
 	return ev

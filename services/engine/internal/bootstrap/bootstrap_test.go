@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -184,5 +185,41 @@ func TestWithDatabase(t *testing.T) {
 	}
 	if code, _ := call("GET", "/api/v1/servers/srv_"+suffix, "", nil); code != 200 {
 		t.Fatalf("get server = %d", code)
+	}
+
+	// SSE over the real stack, and an open stream must not block graceful shutdown.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCtx, stop := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- app.Serve(runCtx, ln) }()
+	req, _ := http.NewRequest("GET", "http://"+ln.Addr().String()+"/api/v1/deployments/"+dep["id"].(string)+"/events/stream", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	sc := bufio.NewScanner(resp.Body)
+	gotFirst := false
+	for sc.Scan() {
+		if sc.Text() == "id: 1" {
+			gotFirst = true
+			break
+		}
+	}
+	if !gotFirst {
+		t.Fatal("stream did not deliver event 1")
+	}
+	stop()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("shutdown with open stream: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("open SSE stream blocked shutdown")
 	}
 }

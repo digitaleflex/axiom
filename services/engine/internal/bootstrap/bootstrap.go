@@ -16,6 +16,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
 	"github.com/digitaleflex/axiom/services/engine/internal/api"
+	"github.com/digitaleflex/axiom/services/engine/internal/api/sse"
 	"github.com/digitaleflex/axiom/services/engine/internal/config"
 	"github.com/digitaleflex/axiom/services/engine/internal/database"
 	deploymentdb "github.com/digitaleflex/axiom/services/engine/internal/database/deployment"
@@ -52,7 +53,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	}
 
 	streams, cancelStreams := context.WithCancel(context.Background())
-	deps, err := buildAPIDeps(ctx, cfg, log, db)
+	deps, err := buildAPIDeps(ctx, cfg, log, db, streams)
 	if err != nil {
 		cancelStreams()
 		if db != nil {
@@ -84,7 +85,7 @@ var localOperator = api.Principal{UserID: "usr_local", Name: "Local operator"}
 
 // buildAPIDeps wires stores and services. Without a database, data endpoints
 // answer 503 SERVICE_UNAVAILABLE instead of serving in-memory state.
-func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *sql.DB) (api.Deps, error) {
+func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *sql.DB, streams context.Context) (api.Deps, error) {
 	deps := api.Deps{Log: log}
 	switch {
 	case cfg.APIToken != "":
@@ -103,6 +104,7 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 		return api.Deps{}, fmt.Errorf("ensure local operator: %w", err)
 	}
 	deps.Deployments = deployment.NewService(deploymentdb.New(db), deployment.NewEventBus())
+	deps.EventStream = &sse.Handler{Store: deps.Deployments.Store(), Bus: deps.Deployments.Events(), Log: log, Shutdown: streams}
 	deps.Applications = database.NewApplicationStore(db)
 	deps.Servers = database.NewRepositories(db).Servers
 	return deps, nil
