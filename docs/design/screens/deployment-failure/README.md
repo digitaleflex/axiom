@@ -68,17 +68,20 @@ L1 panel answers *where / why / impact / what next*. L2 gives the failed step co
 
 The explanation and checklist come from the Engine error contract (#117) — **the UI does not parse logs to guess a cause**.
 
-Reference mapping (to be aligned with #117 error codes; codes below are illustrative placeholders):
+Mapping based on the canonical error classes of `docs/architecture/api-contract.md` §18. The UI branches on `error.code` only; `error.message` may be shown as secondary detail, never parsed. `error.requestId` is shown at L3 (mono, copy) for support.
 
-| Failed step | Example code | L1 explanation | Checklist → correction path |
+| Error code (API §18) | Typical step | L1 explanation | Checklist → correction path |
 |---|---|---|---|
-| Build | `BUILD_COMMAND_FAILED` | "The build command exited with an error." | build command, package manager, lockfile → Edit profile |
-| Build | `DEPENDENCY_INSTALL_FAILED` | "Dependencies could not be installed." | lockfile, private registry config values → Edit configuration |
-| Create Runtime | `RUNTIME_RESOURCES_UNAVAILABLE` | "The server didn't have enough resources." | server capacity → Change server |
-| Configure Network | `DOMAIN_ROUTING_FAILED` | "The domain could not be routed to the application." | DNS, domain → Application Domains |
-| Start | `PROCESS_EXITED` | "The application stopped right after starting (exit code {n})." | start command, required config values |
-| Verify | `HEALTH_CHECK_FAILED` | "The application did not respond to the health check." | port, health path, start command |
-| any | unknown code | "Axiom stopped this deployment at {step}." + raw code (mono) | Open full logs |
+| `BUILD_FAILED` | Build | "The build failed (exit code {n})." | build command, package manager, lockfile → Edit profile; build config values → Edit configuration |
+| `RUNTIME_FAILED` | Create Runtime / Start | "The application couldn't start (exit code {n})." | start command, port, required config values → Edit configuration; server capacity → Change server |
+| `HEALTH_CHECK_FAILED` | Verify | "The application did not respond to the health check." | port, health path, start command |
+| `DEPLOYMENT_NOT_ELIGIBLE` | before Build | "The selected server can't run this deployment." | server readiness/capabilities → Change server |
+| `DEPLOYMENT_INVALID_STATE` | any | "This deployment was stopped because its state changed." | View deployments |
+| `POLICY_DENIED` | any | "Axiom's security policy blocked this deployment." | `error.details` summary; contact workspace owner |
+| `INTERNAL_ERROR` | any | "Axiom hit an internal error at {step}." | Retry; requestId for support |
+| unknown code | any | "Axiom stopped this deployment at {step}." + raw code (mono) | Open full logs |
+
+Network/domain failures currently have no dedicated error class; they surface as `RUNTIME_FAILED` or unknown until #64 / #117 add one. Finer-grained sub-causes (e.g. dependency install vs compile) require `error.details` keys from #117 and are not inferred by the UI.
 
 Unknown codes are shown raw; the screen still names the step and impact.
 
