@@ -240,6 +240,19 @@ export interface ConfigRequirement {
   secret?: boolean
 }
 
+/**
+ * api-contract §8 — application configuration value metadata (#126).
+ *
+ * Values are write-only: no endpoint ever returns a value, so this type has
+ * no value field by contract. `isSet` reports whether a value is stored.
+ */
+export interface ConfigValue {
+  name: string
+  secret: boolean
+  isSet: boolean
+  updatedAt?: string
+}
+
 export interface HealthCheck {
   type?: string
   path?: string

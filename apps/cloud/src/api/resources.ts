@@ -4,6 +4,7 @@ import type {
   Analysis,
   Application,
   AuthResult,
+  ConfigValue,
   Deployment,
   DeploymentEvent,
   DeploymentStep,
@@ -175,6 +176,49 @@ export function putProfileOverrides(
   options: ReadOptions = {},
 ): Promise<Profile> {
   return api.put<Profile>(`/applications/${encodeURIComponent(applicationId)}/profile/overrides`, overrides, options)
+}
+
+/* ------------------------------------------- Configuration values §8 (#126) */
+
+/**
+ * List stored configuration values as metadata only (api-contract §8).
+ * The Engine never returns values — not here, not anywhere.
+ */
+export function listConfiguration(applicationId: string, options: ReadOptions = {}): Promise<ConfigValue[]> {
+  return api
+    .get<unknown>(`/applications/${encodeURIComponent(applicationId)}/configuration`, options)
+    .then((data) => normalizeItems<ConfigValue>(data))
+}
+
+/**
+ * Set (or replace) a configuration value. The Engine stores it encrypted at
+ * rest and returns `204`; the value is injected into the application
+ * environment at deploy time only.
+ */
+export function setConfiguration(
+  applicationId: string,
+  name: string,
+  value: string,
+  secret: boolean,
+  options: ReadOptions = {},
+): Promise<void> {
+  return apiFetch<void>(
+    `/applications/${encodeURIComponent(applicationId)}/configuration/${encodeURIComponent(name)}`,
+    { ...options, method: 'PUT', body: { value, secret } },
+  )
+}
+
+/** Remove a configuration value; `404` when unset (api-contract §8). */
+export function deleteConfiguration(applicationId: string, name: string, options: ReadOptions = {}): Promise<void> {
+  return apiFetch<void>(
+    `/applications/${encodeURIComponent(applicationId)}/configuration/${encodeURIComponent(name)}`,
+    { ...options, method: 'DELETE' },
+  )
+}
+
+/** api-contract §8 — configuration names must match `^[A-Z_][A-Z0-9_]*$`. */
+export function isValidConfigName(name: string): boolean {
+  return /^[A-Z_][A-Z0-9_]*$/.test(name)
 }
 
 /* -------------------------------------------------------------- Plans §10 */

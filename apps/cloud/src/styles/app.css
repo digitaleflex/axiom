@@ -1690,3 +1690,108 @@ textarea {
   gap: var(--space-2);
   margin-top: var(--space-2);
 }
+
+/* --------------------------------------------------------------- Settings */
+
+.settings-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-8);
+}
+
+.settings-nav {
+  flex: 0 0 200px;
+}
+
+.settings-nav__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.settings-nav__link {
+  display: block;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: var(--text-md);
+}
+
+.settings-nav__link:hover {
+  color: var(--text-primary);
+  background: var(--surface-2);
+}
+
+.settings-nav__link[aria-current='page'] {
+  color: var(--text-primary);
+  background: var(--surface-2);
+  font-weight: 600;
+}
+
+.settings-nav__select {
+  display: none;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-control);
+  background: var(--surface-2);
+  color: var(--text-primary);
+  font-size: var(--text-md);
+}
+
+.settings-content {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.confirm-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Mobile: < 768 (--bp-md) — section nav collapses to a select (settings §2) */
+@media (max-width: 767px) {
+  .settings-layout {
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .settings-nav {
+    flex: none;
+    width: 100%;
+  }
+
+  .settings-nav__list {
+    display: none;
+  }
+
+  .settings-nav__select {
+    display: block;
+  }
+}
+
+/* --------------------------------------------------------- Config value row */
+
+.config-value-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+}
+
+.config-value-row__name {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
