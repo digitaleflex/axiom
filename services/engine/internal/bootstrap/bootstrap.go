@@ -15,6 +15,7 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
+	"github.com/digitaleflex/axiom/services/engine/internal/analysis"
 	"github.com/digitaleflex/axiom/services/engine/internal/api"
 	"github.com/digitaleflex/axiom/services/engine/internal/api/sse"
 	"github.com/digitaleflex/axiom/services/engine/internal/config"
@@ -127,7 +128,9 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 			Box: box, Log: log,
 		}
 		deps.GitHub = ghService
-		deps.Repositories = &repos.Service{Tokens: ghService, Store: repos.PGStore{DB: db}, APIURL: cfg.GitHub.APIURL}
+		repoService := &repos.Service{Tokens: ghService, Store: repos.PGStore{DB: db}, APIURL: cfg.GitHub.APIURL}
+		deps.Repositories = repoService
+		deps.Analyses = &analysis.Service{Store: analysis.PGStore{DB: db}, Repos: repoService, Log: log, NewID: deployment.NewID}
 	} else {
 		log.Info("GitHub integration disabled: AXIOM_GITHUB_CLIENT_ID not configured")
 	}

@@ -61,6 +61,9 @@ func fromDomain(err error) *Error {
 	switch {
 	case errors.As(err, &apiErr):
 		return apiErr
+	case isAnalysisErr(err):
+		e, _ := analysisError(err)
+		return e
 	case errors.Is(err, deployment.ErrNotFound):
 		return newError(http.StatusNotFound, CodeNotFound, "deployment not found", nil)
 	case errors.Is(err, deployment.ErrPlanNotFound):
@@ -91,3 +94,5 @@ func fromDomain(err error) *Error {
 		return newError(http.StatusInternalServerError, CodeInternalError, "the Engine could not complete the request", nil)
 	}
 }
+
+func isAnalysisErr(err error) bool { _, ok := analysisError(err); return ok }

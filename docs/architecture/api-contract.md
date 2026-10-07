@@ -206,18 +206,32 @@ Request:
 
 ```json
 {
-  "ref": "main"
+  "ref": "main",
+  "root": "apps/web"
 }
 ```
 
-Response:
+`root` is optional (monorepos; stored for subsequent analyses). The analysis runs synchronously within a bounded time: the ref is resolved to an exact commit, a bounded read-only snapshot is fetched, evidence is collected and a new Application Profile revision is created.
+
+Response `201 Created` (`Location: /api/v1/applications/{id}/analysis/{analysisId}`):
 
 ```json
 {
   "analysisId": "analysis_123",
-  "status": "COMPLETED"
+  "applicationId": "app_123",
+  "ref": "main",
+  "commit": "3f9c2a1…",
+  "root": "",
+  "status": "COMPLETED",
+  "analyzerVersion": "evidence/1.0.0",
+  "profileVersion": 3,
+  "result": { "analyzerVersion": "evidence/1.0.0", "root": "", "findings": [ … ], "warnings": [] },
+  "createdAt": "…",
+  "completedAt": "…"
 }
 ```
+
+A failed analysis is still `201` with `status: "FAILED"` and `errorCode`: `REF_NOT_FOUND`, `SOURCE_ACCESS_FAILED`, `SNAPSHOT_REJECTED` (oversized, malformed, unsafe or empty source). No profile revision is created.
 
 Analysis must inspect repository metadata and files without executing untrusted project code.
 
@@ -225,7 +239,7 @@ Analysis must inspect repository metadata and files without executing untrusted 
 
 `GET /api/v1/applications/{applicationId}/analysis/{analysisId}`
 
-The result contains evidence and confidence for detected characteristics.
+The result contains evidence and confidence for detected characteristics (`schemas/artifact.schema.json#/$defs/RepositoryAnalysis`): each finding has `kind`, `state` (`detected`, `ambiguous`, `not_detected`, `unsupported`, `not_applicable`), `value` / `values`, `confidence` (0–1), `candidates`, and `evidence[]` (`source`, `path`, `lines`, `effect`, `rule`, `explanation`).
 
 ---
 
@@ -235,23 +249,43 @@ The result contains evidence and confidence for detected characteristics.
 
 `GET /api/v1/applications/{applicationId}/profile`
 
-Example:
+Returns the latest profile revision (`schemas/artifact.schema.json#/$defs/ApplicationProfile`, `schemaVersion: 1`). `404 NOT_FOUND` before the first successful analysis.
+
+Every value is an object `{ "value", "provenance", "confidence", "candidates", "replaced" }` with provenance `override` › `manifest` › `detected` › `default`. Defaults are never reported as detected.
 
 ```json
 {
-  "language": "TypeScript",
-  "framework": "Next.js",
-  "packageManager": "pnpm",
-  "buildCommand": "pnpm build",
-  "startCommand": "pnpm start",
-  "port": 3000,
-  "containerStrategy": "docker",
-  "services": [],
-  "confidence": 0.98
+  "schemaVersion": 1,
+  "version": 3,
+  "status": "ready",
+  "preset": "nextjs",
+  "summary": "Axiom will build this Next.js app with pnpm and run it as a container on port 3000.",
+  "blocking": [],
+  "framework": { "value": "Next.js", "provenance": "detected", "confidence": 0.98 },
+  "packageManager": { "value": "pnpm", "provenance": "detected", "confidence": 1 },
+  "buildCommand": { "value": "pnpm run build", "provenance": "detected", "confidence": 0.95 },
+  "startCommand": { "value": "pnpm start", "provenance": "detected", "confidence": 0.95 },
+  "port": { "value": 3000, "provenance": "default" },
+  "containerStrategy": { "value": "source", "provenance": "default" },
+  "healthCheck": { "value": { "type": "http", "path": "/" }, "provenance": "default" },
+  "configuration": [ { "name": "DATABASE_URL", "required": true, "secret": true } ],
+  "confidence": 0.95
 }
 ```
 
-The profile is versioned and traceable to an analysis.
+`status`: `ready` (deployable), `needs_review` (`blocking[]` items with `field`, `code` = `ambiguous` | `low_confidence` | `not_detected` | `invalid_override`, `options`), `unsupported` (`unsupported.code` e.g. `UNSUPPORTED_FRAMEWORK`, `MISSING_START_COMMAND`, `AMBIGUOUS_APPLICATION_ROOT`, with `alternatives`). Only `ready` profiles can be planned.
+
+### Replace overrides
+
+`PUT /api/v1/applications/{applicationId}/profile/overrides`
+
+```json
+{ "packageManager": "pnpm", "port": 8080, "buildCommand": "pnpm build", "startCommand": "pnpm start", "healthPath": "/healthz", "entrypoint": "./cmd/api", "strategy": "dockerfile", "publicService": "web" }
+```
+
+All fields optional; omitted fields revert to detection. Rebuilds the profile from the latest analysis without accessing the repository and returns the new revision. Unsafe commands are reported as `invalid_override` blocking issues and never applied.
+
+The profile is versioned and traceable to an analysis (`analysisId`, `source.commit`).
 
 ---
 
