@@ -1,9 +1,21 @@
 import { NavLink, useParams } from 'react-router-dom'
-import { Placeholder } from '../components/Placeholder'
 import { PageHeader } from '../components/shell/PageHeader'
+import { StatusPill } from '../components/StatusPill'
 import { DEPLOYMENT_TABS, isEnvironment, routes, type DeploymentTab } from '../routes/builders'
+import { DeploymentHealthContent } from './DeploymentHealthContent'
+import { DeploymentLogsContent } from './DeploymentLogsContent'
+import { DeploymentPlanContent } from './DeploymentPlanContent'
+import { DeploymentProgressContent } from './DeploymentProgressContent'
+import { DeploymentRuntimeContent } from './DeploymentRuntimeContent'
+import { DeploymentSummaryContent } from './DeploymentSummaryContent'
+import { useAsync } from '../hooks/useAsync'
+import { getDeployment } from '../api/resources'
+import { SkeletonLines } from '../components/system'
 
-/** Canonical deployment area placeholder with header tabs (shell §6). */
+/**
+ * Deployment area with tab chrome (shell §6, deployment-progress §3).
+ * Each tab renders its real content; the header shows the deployment status.
+ */
 export function DeploymentTabPage() {
   const { applicationId, environment, deploymentId, tab } = useParams<{
     applicationId: string
@@ -13,6 +25,13 @@ export function DeploymentTabPage() {
   }>()
   const env = isEnvironment(environment) ? environment : undefined
   const activeTab = (tab ?? 'progress') as DeploymentTab
+
+  const deploymentState = useAsync(
+    (signal) => (deploymentId ? getDeployment(deploymentId, { signal }) : Promise.reject(new Error('missing id'))),
+    [deploymentId],
+  )
+
+  const deployment = deploymentState.data
 
   const tabs =
     applicationId && env && deploymentId ? (
@@ -43,22 +62,29 @@ export function DeploymentTabPage() {
           { label: applicationId ?? 'Application' },
           ...(env ? [{ label: '', environment: env }] : []),
           { label: 'Deployments' },
-          { label: deploymentId ?? 'Deployment', current: true },
+          { label: deployment?.number ? `#${deployment.number}` : (deploymentId ?? 'Deployment'), current: true },
         ]}
-        title={`Deployment ${deploymentId ?? ''}`}
+        title={`Deployment ${deployment?.number ? `#${deployment.number}` : ''}`}
         environment={env}
+        meta={
+          deployment
+            ? `${deployment.id}${deployment.startedAt ? ` · started ${deployment.startedAt}` : ''}`
+            : undefined
+        }
+        actions={
+          <div className="row" style={{ gap: 8 }}>
+            {deployment?.status && <StatusPill status={deployment.status} />}
+          </div>
+        }
         tabs={tabs}
       />
-      <div className="content__body">
-        <Placeholder
-          params={{ applicationId, environment, deploymentId, tab: activeTab }}
-          resources={[
-            'GET /api/v1/deployments/{deploymentId}',
-            'GET /api/v1/deployments/{deploymentId}/events/stream (SSE)',
-          ]}
-          note="Deployment tabs render in the page header; each tab's content lands in #120."
-        />
-      </div>
+      {deploymentState.status === 'loading' && <SkeletonLines lines={4} />}
+      {activeTab === 'summary' && <DeploymentSummaryContent />}
+      {activeTab === 'plan' && <DeploymentPlanContent />}
+      {activeTab === 'progress' && <DeploymentProgressContent />}
+      {activeTab === 'logs' && <DeploymentLogsContent />}
+      {activeTab === 'health' && <DeploymentHealthContent />}
+      {activeTab === 'runtime' && <DeploymentRuntimeContent />}
     </>
   )
 }

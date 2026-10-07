@@ -1,10 +1,19 @@
 import { api, apiFetch, type RequestOptions } from './client'
 import { normalizePage, type PageQuery } from './pagination'
 import type {
+  Analysis,
   Application,
   Deployment,
+  DeploymentEvent,
+  DeploymentStep,
+  Domain,
   GithubConnection,
+  HealthResult,
+  LogEntry,
   Paginated,
+  Plan,
+  Profile,
+  Ref,
   Repository,
   Server,
   User,
@@ -74,6 +83,12 @@ export function getRepository(repositoryId: string, options: ReadOptions = {}): 
   return api.get<Repository>(`/repositories/${encodeURIComponent(repositoryId)}`, options)
 }
 
+export function listRefs(repositoryId: string, options: ReadOptions = {}): Promise<Ref[]> {
+  return api
+    .get<unknown>(`/repositories/${encodeURIComponent(repositoryId)}/refs`, options)
+    .then(normalizeItems<Ref>)
+}
+
 /* ----------------------------------------------------------- Applications §6 */
 
 export async function listApplications(options: ReadOptions = {}): Promise<Paginated<Application>> {
@@ -83,6 +98,205 @@ export async function listApplications(options: ReadOptions = {}): Promise<Pagin
 
 export function getApplication(applicationId: string, options: ReadOptions = {}): Promise<Application> {
   return api.get<Application>(`/applications/${encodeURIComponent(applicationId)}`, options)
+}
+
+export function createApplication(
+  body: { repositoryId: string; name: string },
+  options: ReadOptions = {},
+): Promise<Application> {
+  return api.post<Application>('/applications', body, options)
+}
+
+/* ----------------------------------------------------------- Analysis §7 */
+
+export function startAnalysis(
+  applicationId: string,
+  body: { ref: string; root?: string },
+  options: ReadOptions = {},
+): Promise<Analysis> {
+  return api.post<Analysis>(`/applications/${encodeURIComponent(applicationId)}/analysis`, body, options)
+}
+
+export function getAnalysis(
+  applicationId: string,
+  analysisId: string,
+  options: ReadOptions = {},
+): Promise<Analysis> {
+  return api.get<Analysis>(
+    `/applications/${encodeURIComponent(applicationId)}/analysis/${encodeURIComponent(analysisId)}`,
+    options,
+  )
+}
+
+/* ------------------------------------------------------------ Profile §8 */
+
+export function getProfile(applicationId: string, options: ReadOptions = {}): Promise<Profile> {
+  return api.get<Profile>(`/applications/${encodeURIComponent(applicationId)}/profile`, options)
+}
+
+export function putProfileOverrides(
+  applicationId: string,
+  overrides: Record<string, unknown>,
+  options: ReadOptions = {},
+): Promise<Profile> {
+  return api.put<Profile>(`/applications/${encodeURIComponent(applicationId)}/profile/overrides`, overrides, options)
+}
+
+/* -------------------------------------------------------------- Plans §10 */
+
+export function generatePlan(
+  applicationId: string,
+  body: { serverId: string; ref: string; domain?: string },
+  options: ReadOptions = {},
+): Promise<Plan> {
+  return api.post<Plan>(`/applications/${encodeURIComponent(applicationId)}/deployment-plans`, body, options)
+}
+
+export function getPlan(planId: string, options: ReadOptions = {}): Promise<Plan> {
+  return api.get<Plan>(`/deployment-plans/${encodeURIComponent(planId)}`, options)
+}
+
+/* -------------------------------------------------------- Deployments §11 */
+
+export interface DeploymentQuery extends PageQuery {
+  status?: string
+  environment?: string
+}
+
+export async function listDeployments(
+  applicationId: string,
+  query: DeploymentQuery = {},
+  options: ReadOptions = {},
+): Promise<Paginated<Deployment>> {
+  const data = await api.get<unknown>(`/applications/${encodeURIComponent(applicationId)}/deployments`, {
+    ...options,
+    query: { page: query.page, limit: query.limit, status: query.status, environment: query.environment },
+  })
+  return normalizePage<Deployment>(data)
+}
+
+/**
+ * Creates a deployment from a plan. The caller MUST pass a deterministic
+ * Idempotency-Key (see workflow/idempotency) so double-clicks and retries
+ * cannot create a second deployment from one plan.
+ */
+export function createDeployment(
+  applicationId: string,
+  planId: string,
+  idempotencyKey: string,
+  options: ReadOptions = {},
+): Promise<Deployment> {
+  return api.post<Deployment>(
+    `/applications/${encodeURIComponent(applicationId)}/deployments`,
+    { planId },
+    { ...options, headers: { 'Idempotency-Key': idempotencyKey } },
+  )
+}
+
+export function cancelDeployment(deploymentId: string, options: ReadOptions = {}): Promise<Deployment> {
+  return api.post<Deployment>(`/deployments/${encodeURIComponent(deploymentId)}/cancel`, undefined, options)
+}
+
+/* ---------------------------------------------------- Steps / events §13–14 */
+
+export function listSteps(deploymentId: string, options: ReadOptions = {}): Promise<DeploymentStep[]> {
+  return api
+    .get<unknown>(`/deployments/${encodeURIComponent(deploymentId)}/steps`, options)
+    .then((data) => normalizeItems<DeploymentStep>(data))
+}
+
+export interface EventQuery {
+  after?: number
+  limit?: number
+}
+
+export async function listEvents(
+  deploymentId: string,
+  query: EventQuery = {},
+  options: ReadOptions = {},
+): Promise<{ items: DeploymentEvent[]; nextAfter: number | null }> {
+  const data = await api.get<unknown>(`/deployments/${encodeURIComponent(deploymentId)}/events`, {
+    ...options,
+    query: { after: query.after, limit: query.limit },
+  })
+  const record = (data ?? {}) as { items?: unknown; nextAfter?: number | null }
+  return {
+    items: Array.isArray(record.items) ? (record.items as DeploymentEvent[]) : [],
+    nextAfter: typeof record.nextAfter === 'number' ? record.nextAfter : null,
+  }
+}
+
+export interface LogQuery {
+  step?: string
+  level?: string
+  source?: string
+  q?: string
+  cursor?: string
+  limit?: number
+}
+
+export async function listLogs(
+  deploymentId: string,
+  query: LogQuery = {},
+  options: ReadOptions = {},
+): Promise<{ items: LogEntry[]; nextCursor: string | null }> {
+  const data = await api.get<unknown>(`/deployments/${encodeURIComponent(deploymentId)}/logs`, {
+    ...options,
+    query: {
+      step: query.step,
+      level: query.level,
+      source: query.source,
+      q: query.q,
+      cursor: query.cursor,
+      limit: query.limit,
+    },
+  })
+  const record = (data ?? {}) as { items?: unknown; nextCursor?: string | null }
+  return {
+    items: Array.isArray(record.items) ? (record.items as LogEntry[]) : [],
+    nextCursor: typeof record.nextCursor === 'string' ? record.nextCursor : null,
+  }
+}
+
+/* ------------------------------------------------------------- Health §16 */
+
+export function getDeploymentHealth(deploymentId: string, options: ReadOptions = {}): Promise<HealthResult> {
+  return api.get<HealthResult>(`/deployments/${encodeURIComponent(deploymentId)}/health`, options)
+}
+
+/* ------------------------------------------------------------ Domains §17 */
+
+export function listDomains(
+  applicationId: string,
+  environment?: string,
+  options: ReadOptions = {},
+): Promise<Domain[]> {
+  return api
+    .get<unknown>(`/applications/${encodeURIComponent(applicationId)}/domains`, {
+      ...options,
+      query: { environment },
+    })
+    .then(normalizeItems<Domain>)
+}
+
+export function createDomain(
+  applicationId: string,
+  body: { hostname: string; environment: string },
+  options: ReadOptions = {},
+): Promise<Domain> {
+  return api.post<Domain>(`/applications/${encodeURIComponent(applicationId)}/domains`, body, options)
+}
+
+export function deleteDomain(domainId: string, options: ReadOptions = {}): Promise<void> {
+  return apiFetch<void>(`/domains/${encodeURIComponent(domainId)}`, { ...options, method: 'DELETE' })
+}
+
+export function setPrimaryDomain(domainId: string, options: ReadOptions = {}): Promise<Domain> {
+  return api.post<Domain>(`/domains/${encodeURIComponent(domainId)}/primary`, undefined, options)
+}
+
+export function checkDomain(domainId: string, options: ReadOptions = {}): Promise<Domain> {
+  return api.post<Domain>(`/domains/${encodeURIComponent(domainId)}/check`, undefined, options)
 }
 
 /* ---------------------------------------------------------------- Servers §9 */

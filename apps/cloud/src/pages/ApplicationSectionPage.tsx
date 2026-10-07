@@ -1,7 +1,8 @@
 import { useParams } from 'react-router-dom'
-import { Placeholder } from '../components/Placeholder'
 import { PageHeader } from '../components/shell/PageHeader'
 import { isEnvironment, routes, type ApplicationSection } from '../routes/builders'
+import { ApplicationSectionContent } from './ApplicationSectionContent'
+import { NotFoundPage } from './NotFoundPage'
 
 const SECTION_TITLES: Record<string, string> = {
   overview: 'Overview',
@@ -11,7 +12,10 @@ const SECTION_TITLES: Record<string, string> = {
   domains: 'Domains',
 }
 
-/** Canonical application area placeholder (navigation §5.1). */
+/**
+ * Application section (application §2, logs §1, metrics §1, domains §1).
+ * Route `/apps/:id/:env/:section`. Each section renders its real content.
+ */
 export function ApplicationSectionPage() {
   const { applicationId, environment, section } = useParams<{
     applicationId: string
@@ -21,31 +25,23 @@ export function ApplicationSectionPage() {
   const env = isEnvironment(environment) ? environment : undefined
   const sectionKey = (section ?? 'overview') as ApplicationSection
 
+  if (!env || !SECTION_TITLES[sectionKey]) {
+    return <NotFoundPage />
+  }
+
   return (
     <>
       <PageHeader
         breadcrumbs={[
           { label: 'Workspace', to: routes.dashboard() },
           { label: applicationId ?? 'Application' },
-          ...(env ? [{ label: '', environment: env }] : []),
-          { label: SECTION_TITLES[sectionKey] ?? sectionKey, current: true },
+          { label: '', environment: env },
+          { label: SECTION_TITLES[sectionKey], current: true },
         ]}
-        title={SECTION_TITLES[sectionKey] ?? 'Application'}
+        title={SECTION_TITLES[sectionKey]}
         environment={env}
       />
-      <div className="content__body">
-        <Placeholder
-          params={{ applicationId, environment, section }}
-          resources={[
-            'GET /api/v1/applications/{applicationId}',
-            'GET /api/v1/applications/{applicationId}/deployments',
-            sectionKey === 'logs' ? 'GET /api/v1/deployments/{deploymentId}/logs' : '',
-            sectionKey === 'metrics' ? 'GET /api/v1/servers/{serverId}/metrics' : '',
-            sectionKey === 'domains' ? 'GET /api/v1/domains' : '',
-          ].filter(Boolean)}
-          note="Environment-aware screens land in #120; the environment chip and context bar already follow the URL."
-        />
-      </div>
+      <ApplicationSectionContent section={sectionKey} />
     </>
   )
 }

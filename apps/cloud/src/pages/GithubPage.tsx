@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { ApiError } from '../api/errors'
 import { disconnectGithubConnection, listGithubConnections, startGithubConnect } from '../api/resources'
 import { PageHeader } from '../components/shell/PageHeader'
@@ -7,11 +8,29 @@ import { EmptyState, ErrorPanel, InlineNotice, SkeletonRows, useToast } from '..
 import { useAsync } from '../hooks/useAsync'
 import { routes } from '../routes/builders'
 
+type CallbackResult = 'connected' | 'denied' | 'error'
+
+/**
+ * GitHub Connection screen (github §1). Connect GitHub so Axiom can read
+ * repositories. Handles the OAuth callback result (`?result=connected|denied|error`).
+ */
 export function GithubPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const { push } = useToast()
   const state = useAsync((signal) => listGithubConnections({ signal }), [])
   const [connecting, setConnecting] = useState(false)
   const [connectError, setConnectError] = useState<ApiError | null>(null)
+
+  const callbackResult = searchParams.get('result') as CallbackResult | null
+
+  // Remove the result param after showing it (github §2).
+  useEffect(() => {
+    if (callbackResult) {
+      const params = new URLSearchParams(searchParams)
+      params.delete('result')
+      setSearchParams(params, { replace: true })
+    }
+  }, [callbackResult, searchParams, setSearchParams])
 
   const connect = async () => {
     setConnecting(true)
@@ -45,11 +64,27 @@ export function GithubPage() {
         title="GitHub"
         actions={
           <button className="btn btn--primary" type="button" onClick={() => void connect()} disabled={connecting}>
-            {connecting ? 'Redirecting…' : 'Connect GitHub'}
+            {connecting ? 'Opening GitHub…' : 'Connect GitHub'}
           </button>
         }
       />
       <div className="content__body stack">
+        {callbackResult === 'connected' && (
+          <InlineNotice variant="success" title="GitHub connected">
+            Your GitHub account is connected. Browse repositories to deploy from them.
+          </InlineNotice>
+        )}
+        {callbackResult === 'denied' && (
+          <InlineNotice variant="info" title="GitHub access was not granted">
+            Nothing was connected. You can try again when you're ready.
+          </InlineNotice>
+        )}
+        {callbackResult === 'error' && (
+          <InlineNotice variant="failed" title="GitHub connection failed">
+            Something went wrong during the GitHub authorization. Please try again.
+          </InlineNotice>
+        )}
+
         {connectError?.isUnavailable && (
           <InlineNotice variant="warning" title="GitHub is not configured on this Engine">
             The Engine returned <span className="mono">SERVICE_UNAVAILABLE</span> (503). Ask an operator to configure the

@@ -9,6 +9,7 @@ import { ApplicationSectionPage } from '../pages/ApplicationSectionPage'
 import { DashboardPage } from '../pages/DashboardPage'
 import { DeploymentProgressPage } from '../pages/DeploymentProgressPage'
 import { DeploymentTabPage } from '../pages/DeploymentTabPage'
+import { PlanPage } from '../pages/PlanPage'
 import { DomainsPage } from '../pages/DomainsPage'
 import { GithubPage } from '../pages/GithubPage'
 import { LoginPage } from '../pages/LoginPage'
@@ -50,6 +51,7 @@ export function AppRoutes() {
 
         {/* Canonical navigation routes (navigation §5.1) */}
         <Route path="/apps/:applicationId" element={<AppsRedirect />} />
+        <Route path="/apps/:applicationId/setup/plan/:planId" element={<PlanPage />} />
         <Route path="/apps/:applicationId/setup/:step" element={<SetupPage />} />
         <Route path="/apps/:applicationId/:environment/:section" element={<ApplicationSectionPage />} />
         <Route

@@ -30,6 +30,8 @@ export interface RouteContext {
   serverId?: string
   section?: string
   setupStep?: SetupStep
+  /** Plan ID on `/apps/:id/setup/plan/:planId`. */
+  planId?: string
   deploymentTab?: DeploymentTab
   /** Path does not match any known route. */
   unknown: boolean
@@ -115,6 +117,16 @@ export function parseRoute(pathname: string): RouteContext {
 
     // /apps/:id/setup/:step  and  /apps/:id/setup/plan/:planId
     if (third === 'setup') {
+      if (fourth === 'plan') {
+        return {
+          variant: 'setup',
+          sidebarActive: null,
+          applicationId: second,
+          setupStep: 'plan',
+          planId: fifth,
+          unknown: false,
+        }
+      }
       const step = (fourth ?? 'analysis') as SetupStep
       return {
         variant: 'setup',
