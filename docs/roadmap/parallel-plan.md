@@ -9,6 +9,12 @@
 M0 (#25–#27), M1 (#28–#33), M2 (#34–#39), M3 engine (#57–#68), design (#131–#142).
 Action: close issues with a status comment each; keep epics (#13–#17) open until their last child lands.
 
+## Status
+
+- **Wave 1 — DONE** (A #76/#77 `977b0b1`, B #89/#79 `d13f3e4`, C #83 `87061f3`, D #124/#121 `0a11717`, E #119 `ffefc1d`, F #104/#129-draft `7f786d5`)
+- **Wave 2 — DONE** (G #78/#80 `5cf22ab`, H #84/#85/#86 `529244c`, I #122/#120 `36e99b9`, J #101 `220ea66`; follow-up correlation IDs `7b232de`)
+- **Wave 3 — IN FLIGHT** (K #81/#82, L #87/#103, M #125, N #126)
+
 ## Wave 1 — launch now (5 lanes, no inter-dependencies)
 
 | Lane | Issues | Owned paths (exclusive) | Size | Notes |
