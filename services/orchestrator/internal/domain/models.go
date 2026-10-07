@@ -8,15 +8,15 @@ type Run struct {
 }
 
 type Task struct {
-	ID               string
-	ProjectID        string
-	Role             string
-	Objective        string
-	Dependencies     []string
-	RequiredArtifacts []string
+	ID                   string
+	ProjectID            string
+	Role                 string
+	Objective            string
+	Dependencies         []string
+	RequiredArtifacts    []string
 	RequiredCapabilities []string
-	ApprovalRequired bool
-	Status           string
+	ApprovalRequired     bool
+	Status               string
 }
 
 type ArtifactRef struct {
@@ -26,8 +26,8 @@ type ArtifactRef struct {
 }
 
 type Execution struct {
-	ID            string
-	TaskID        string
+	ID             string
+	TaskID         string
 	IdempotencyKey string
-	Attempt       int
+	Attempt        int
 }

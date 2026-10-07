@@ -7,8 +7,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/digitaleflex/axiom/services/agent/internal/config"
 	"github.com/digitaleflex/axiom/services/agent/internal/agent"
+	"github.com/digitaleflex/axiom/services/agent/internal/config"
 )
 
 func main() {
@@ -19,7 +19,7 @@ func main() {
 	defer stop()
 
 	runtime := agent.NewRuntime(log)
-	a := agent.New(cfg, runtime, log)
+	a := agent.New(agent.Config{ServerID: cfg.ServerID, EngineURL: cfg.EngineURL, Version: cfg.Version, Token: cfg.Token}, runtime, log)
 
 	log.Info("axiom runtime agent started", "server_id", cfg.ServerID, "version", cfg.Version)
 

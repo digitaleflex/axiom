@@ -5,18 +5,18 @@ import "fmt"
 type RunState string
 
 const (
-	RunCreated RunState = "CREATED"
-	RunPlanning RunState = "PLANNING"
-	RunReady RunState = "READY"
-	RunRunning RunState = "RUNNING"
-	RunWaitingGate RunState = "WAITING_GATE"
-	RunWaitingApproval RunState = "WAITING_APPROVAL"
-	RunBlocked RunState = "BLOCKED"
-	RunFailed RunState = "FAILED"
-	RunRetrying RunState = "RETRYING"
+	RunCreated          RunState = "CREATED"
+	RunPlanning         RunState = "PLANNING"
+	RunReady            RunState = "READY"
+	RunRunning          RunState = "RUNNING"
+	RunWaitingGate      RunState = "WAITING_GATE"
+	RunWaitingApproval  RunState = "WAITING_APPROVAL"
+	RunBlocked          RunState = "BLOCKED"
+	RunFailed           RunState = "FAILED"
+	RunRetrying         RunState = "RETRYING"
 	RunRevisionRequired RunState = "REVISION_REQUIRED"
-	RunCompleted RunState = "COMPLETED"
-	RunCancelled RunState = "CANCELLED"
+	RunCompleted        RunState = "COMPLETED"
+	RunCancelled        RunState = "CANCELLED"
 )
 
 func CanTransition(from, to RunState) bool {

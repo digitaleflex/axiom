@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/stdlib"
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/config"
 	"github.com/digitaleflex/axiom/services/engine/internal/database"
@@ -75,7 +75,7 @@ func openDatabase(ctx context.Context, cfg config.Config, log interface{ Error(s
 		return nil
 	}
 
-	db, err := database.Open(ctx, stdlib.GetDefaultDriver(), database.Config{
+	db, err := database.Open(ctx, "pgx", database.Config{
 		URL:             cfg.Database.URL,
 		MaxOpenConns:    cfg.Database.MaxOpenConns,
 		MaxIdleConns:    cfg.Database.MaxIdleConns,

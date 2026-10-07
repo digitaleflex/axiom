@@ -3,11 +3,11 @@ package orchestrator
 import (
 	"testing"
 
+	"github.com/digitaleflex/axiom/services/orchestrator/internal/adapters"
 	orchcontext "github.com/digitaleflex/axiom/services/orchestrator/internal/context"
 	"github.com/digitaleflex/axiom/services/orchestrator/internal/domain"
 	"github.com/digitaleflex/axiom/services/orchestrator/internal/policy"
 	"github.com/digitaleflex/axiom/services/orchestrator/internal/router"
-	"github.com/digitaleflex/axiom/services/orchestrator/internal/adapters"
 )
 
 type fakeExecutor struct{ calls int }
@@ -21,9 +21,9 @@ func TestRunEngineExecutesDependencyChain(t *testing.T) {
 	executor := &fakeExecutor{}
 	engine := RunEngine{
 		Engine: Engine{
-			Agents: []router.Agent{{ID: "architect-1", Role: "Architect", Capabilities: map[string]bool{"architecture": true}, Permissions: map[string]bool{"architecture": true}}},
+			Agents:   []router.Agent{{ID: "architect-1", Role: "Architect", Capabilities: map[string]bool{"architecture": true}, Permissions: map[string]bool{"architecture": true}}},
 			Executor: executor,
-			Policy: policy.StaticPolicy{Rules: map[string]policy.Decision{"architecture:architecture": policy.Allow}},
+			Policy:   policy.StaticPolicy{Rules: map[string]policy.Decision{"architecture:architecture": policy.Allow}},
 		},
 		Transition: MemoryTransitioner{},
 	}

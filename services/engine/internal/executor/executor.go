@@ -30,12 +30,6 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 		return Result{}, err
 	}
 
-	if err := e.runStep(ctx, record, "PREPARE", func() error {
-		return e.agent.Prepare(ctx, PrepareRequest{DeploymentID: req.DeploymentID, ServerID: req.Plan.ServerID})
-	}); err != nil {
-		return e.fail(ctx, req.DeploymentID, err)
-	}
-
 	record, err = e.deployments.Transition(ctx, req.DeploymentID, deployment.StatePlanning)
 	if err != nil {
 		return Result{}, err
@@ -51,11 +45,11 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 		var buildErr error
 		build, buildErr = e.builder.Build(ctx, BuildRequest{
 			DeploymentID: req.DeploymentID,
-			Repository: req.Repository,
-			Ref: req.Ref,
-			WorkDir: req.WorkDir,
-			Image: req.Image,
-			Command: req.Plan.Build.Command,
+			Repository:   req.Repository,
+			Ref:          req.Ref,
+			WorkDir:      req.WorkDir,
+			Image:        req.Image,
+			Command:      req.Plan.Build.Command,
 		})
 		return buildErr
 	}); err != nil {
@@ -70,10 +64,10 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 	if err := e.runStep(ctx, record, "CREATE_RUNTIME", func() error {
 		return e.agent.CreateRuntime(ctx, CreateRuntimeRequest{
 			DeploymentID: req.DeploymentID,
-			ServerID: req.Plan.ServerID,
-			ImageRef: build.ImageRef,
-			Container: req.Container,
-			Port: req.Plan.Runtime.Port,
+			ServerID:     req.Plan.ServerID,
+			ImageRef:     build.ImageRef,
+			Container:    req.Container,
+			Port:         req.Plan.Runtime.Port,
 		})
 	}); err != nil {
 		return e.fail(ctx, req.DeploymentID, err)
@@ -82,12 +76,12 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 	if err := e.runStep(ctx, record, "NETWORK", func() error {
 		return e.agent.ConfigureNetwork(ctx, NetworkRequest{
 			DeploymentID: req.DeploymentID,
-			ServerID: req.Plan.ServerID,
-			Container: req.Container,
-			Proxy: req.Plan.Network.Proxy,
-			Domain: req.Plan.Network.Domain,
-			TLS: req.Plan.Network.TLS,
-			Port: req.Plan.Network.ExposedPort,
+			ServerID:     req.Plan.ServerID,
+			Container:    req.Container,
+			Proxy:        req.Plan.Network.Proxy,
+			Domain:       req.Plan.Network.Domain,
+			TLS:          req.Plan.Network.TLS,
+			Port:         req.Plan.Network.ExposedPort,
 		})
 	}); err != nil {
 		return e.fail(ctx, req.DeploymentID, err)
@@ -96,8 +90,8 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 	if err := e.runStep(ctx, record, "START", func() error {
 		return e.agent.StartRuntime(ctx, StartRequest{
 			DeploymentID: req.DeploymentID,
-			ServerID: req.Plan.ServerID,
-			Container: req.Container,
+			ServerID:     req.Plan.ServerID,
+			Container:    req.Container,
 		})
 	}); err != nil {
 		return e.fail(ctx, req.DeploymentID, err)
@@ -110,10 +104,10 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 
 	if err := e.runStep(ctx, record, "VERIFY", func() error {
 		return e.agent.HealthCheck(ctx, HealthCheckRequest{
-			DeploymentID: req.DeploymentID,
-			ServerID: req.Plan.ServerID,
-			Domain: req.Plan.Network.Domain,
-			Path: req.Plan.Health.Path,
+			DeploymentID:   req.DeploymentID,
+			ServerID:       req.Plan.ServerID,
+			Domain:         req.Plan.Network.Domain,
+			Path:           req.Plan.Health.Path,
 			TimeoutSeconds: req.Plan.Health.TimeoutSeconds,
 		})
 	}); err != nil {

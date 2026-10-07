@@ -17,7 +17,9 @@ func TestBuildApplicationProfile(t *testing.T) {
 		},
 	})
 	p, err := NewBuilder().Build(result)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if p.Framework != "Next.js" || p.PackageManager != "pnpm" || p.Port != 3000 {
 		t.Fatalf("unexpected profile: %+v", p)
 	}

@@ -1,0 +1,46 @@
+name: Go
+
+on:
+  pull_request:
+    paths: ["services/**", ".github/workflows/go.yml"]
+  push:
+    branches: [main]
+    paths: ["services/**", ".github/workflows/go.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [engine, agent, orchestrator]
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: axiom
+          POSTGRES_USER: axiom
+          POSTGRES_PASSWORD: axiom
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U axiom -d axiom"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: services/${{ matrix.module }}
+    env:
+      AXIOM_TEST_DATABASE_URL: postgres://axiom:axiom@localhost:5432/axiom?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/${{ matrix.module }}/go.mod
+          cache: false
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...

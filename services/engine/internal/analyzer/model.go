@@ -18,8 +18,8 @@ type Finding struct {
 }
 
 type Result struct {
-	Version   int
-	Ref       string
-	Findings  []Finding
-	Warnings  []string
+	Version  int
+	Ref      string
+	Findings []Finding
+	Warnings []string
 }

@@ -11,10 +11,12 @@ type fakeRuntime struct{}
 func (fakeRuntime) Capabilities(context.Context) ([]string, error) {
 	return []string{"docker", "traefik"}, nil
 }
-func (fakeRuntime) Prepare(context.Context, string) error { return nil }
+func (fakeRuntime) Prepare(context.Context, string) error                            { return nil }
 func (fakeRuntime) CreateRuntime(context.Context, string, string, string, int) error { return nil }
-func (fakeRuntime) ConfigureNetwork(context.Context, string, string, string, string, bool, int) error { return nil }
-func (fakeRuntime) StartRuntime(context.Context, string, string) error { return nil }
+func (fakeRuntime) ConfigureNetwork(context.Context, string, string, string, string, bool, int) error {
+	return nil
+}
+func (fakeRuntime) StartRuntime(context.Context, string, string) error             { return nil }
 func (fakeRuntime) HealthCheck(context.Context, string, string, string, int) error { return nil }
 
 func TestAgentRequiresServerID(t *testing.T) {

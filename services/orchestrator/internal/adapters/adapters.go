@@ -1,10 +1,10 @@
 package adapters
 
 type Agent struct {
-	ID string
-	Role string
+	ID           string
+	Role         string
 	Capabilities map[string]bool
-	Permissions map[string]bool
+	Permissions  map[string]bool
 }
 
 type Executor interface {
@@ -12,21 +12,21 @@ type Executor interface {
 }
 
 type Task struct {
-	ID string
-	Role string
+	ID           string
+	Role         string
 	Capabilities []string
-	Permissions []string
-	Objective string
+	Permissions  []string
+	Objective    string
 }
 
 type Result struct {
 	ExecutionID string
-	Artifacts []Artifact
+	Artifacts   []Artifact
 }
 
 type Artifact struct {
-	ID string
-	Type string
+	ID      string
+	Type    string
 	Version string
-	Valid bool
+	Valid   bool
 }

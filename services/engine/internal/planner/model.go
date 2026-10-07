@@ -14,16 +14,16 @@ type ServerProfile struct {
 }
 
 type Plan struct {
-	ID                       string
+	ID                        string
 	ApplicationProfileVersion int
-	ServerID                 string
-	Strategy                 string
-	Build                    BuildPlan
-	Runtime                  RuntimePlan
-	Network                  NetworkPlan
-	Health                   HealthPlan
-	Rollback                 RollbackPlan
-	Steps                    []Step
+	ServerID                  string
+	Strategy                  string
+	Build                     BuildPlan
+	Runtime                   RuntimePlan
+	Network                   NetworkPlan
+	Health                    HealthPlan
+	Rollback                  RollbackPlan
+	Steps                     []Step
 }
 
 type BuildPlan struct {

@@ -8,16 +8,10 @@ import (
 )
 
 type RuntimeAgent interface {
-	Prepare(ctx context.Context, req PrepareRequest) error
 	CreateRuntime(ctx context.Context, req CreateRuntimeRequest) error
 	ConfigureNetwork(ctx context.Context, req NetworkRequest) error
 	StartRuntime(ctx context.Context, req StartRequest) error
 	HealthCheck(ctx context.Context, req HealthCheckRequest) error
-}
-
-type PrepareRequest struct {
-	DeploymentID string
-	ServerID     string
 }
 
 type CreateRuntimeRequest struct {
@@ -45,10 +39,10 @@ type StartRequest struct {
 }
 
 type HealthCheckRequest struct {
-	DeploymentID string
-	ServerID     string
-	Domain       string
-	Path         string
+	DeploymentID   string
+	ServerID       string
+	Domain         string
+	Path           string
 	TimeoutSeconds int
 }
 
@@ -78,14 +72,14 @@ type PlanExecutor struct {
 }
 
 type Request struct {
-	DeploymentID string
+	DeploymentID  string
 	ApplicationID string
-	Repository   string
-	Ref          string
-	WorkDir      string
-	Image        string
-	Container    string
-	Plan         planner.Plan
+	Repository    string
+	Ref           string
+	WorkDir       string
+	Image         string
+	Container     string
+	Plan          planner.Plan
 }
 
 type Result struct {

@@ -14,7 +14,7 @@ import (
 // Persistence is deliberately injected so the execution policy remains
 // independent from a database or queue implementation.
 type RunEngine struct {
-	Engine    Engine
+	Engine     Engine
 	Transition Transitioner
 }
 
@@ -64,8 +64,10 @@ func (e RunEngine) Execute(run *domain.Run, tasks []domain.Task, ctx orchcontext
 			return e.Transition.Transition(run, lifecycle.RunCompleted)
 		}
 
-		if err := e.Transition.Transition(run, lifecycle.RunRunning); err != nil {
-			return err
+		if run.State != string(lifecycle.RunRunning) {
+			if err := e.Transition.Transition(run, lifecycle.RunRunning); err != nil {
+				return err
+			}
 		}
 		for _, readyTask := range ready {
 			idx := indexTask(tasks, readyTask.ID)

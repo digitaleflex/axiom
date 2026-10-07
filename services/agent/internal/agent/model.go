@@ -10,12 +10,12 @@ type Config struct {
 }
 
 type Registration struct {
-	ServerID      string
-	AgentVersion  string
-	Capabilities  []string
-	CPUCount      int
-	MemoryMB      int
-	DiskFreeMB    int
+	ServerID     string
+	AgentVersion string
+	Capabilities []string
+	CPUCount     int
+	MemoryMB     int
+	DiskFreeMB   int
 }
 
 type Operation struct {

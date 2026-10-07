@@ -29,12 +29,12 @@ type Repositories struct {
 
 func NewRepositories(db *sql.DB) Repositories {
 	return Repositories{
-		Users: UserRepository{db: db},
+		Users:             UserRepository{db: db},
 		GitHubConnections: GitHubConnectionRepository{db: db},
-		Repositories: RepositoryRepository{db: db},
-		Applications: ApplicationRepository{db: db},
-		Servers: ServerRepository{db: db},
-		Deployments: DeploymentRepository{db: db},
+		Repositories:      RepositoryRepository{db: db},
+		Applications:      ApplicationRepository{db: db},
+		Servers:           ServerRepository{db: db},
+		Deployments:       DeploymentRepository{db: db},
 	}
 }
 

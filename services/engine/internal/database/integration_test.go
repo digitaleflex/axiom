@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/stdlib"
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/database"
 	"github.com/digitaleflex/axiom/services/engine/migrations"
@@ -22,7 +22,7 @@ func TestPostgreSQLPersistence(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	db, err := database.Open(ctx, stdlib.GetDefaultDriver(), database.Config{
+	db, err := database.Open(ctx, "pgx", database.Config{
 		URL:             url,
 		MaxOpenConns:    5,
 		MaxIdleConns:    2,
@@ -39,7 +39,8 @@ func TestPostgreSQLPersistence(t *testing.T) {
 
 	repos := database.NewRepositories(db)
 	ids := testIDs()
-	defer cleanupTestData(t, ctx, db, ids.user)
+	cleanupTestData(t, ctx, db, ids)
+	defer cleanupTestData(t, ctx, db, ids)
 
 	if err := repos.Users.Create(ctx, ids.user); err != nil {
 		t.Fatalf("create user: %v", err)
@@ -88,7 +89,7 @@ func TestTransactionRollback(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	db, err := sql.Open(stdlib.GetDefaultDriver(), url)
+	db, err := sql.Open("pgx", url)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
@@ -135,9 +136,13 @@ func testIDs() testIDSet {
 	}
 }
 
-func cleanupTestData(t *testing.T, ctx context.Context, db *sql.DB, userID string) {
+func cleanupTestData(t *testing.T, ctx context.Context, db *sql.DB, ids testIDSet) {
 	t.Helper()
-	if _, err := db.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, userID); err != nil {
-		t.Logf("cleanup test data: %v", err)
+	// Deleting the user cascades to connections, repositories, applications and deployments.
+	if _, err := db.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, ids.user); err != nil {
+		t.Logf("cleanup users: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM servers WHERE id = $1`, ids.server); err != nil {
+		t.Logf("cleanup servers: %v", err)
 	}
 }
