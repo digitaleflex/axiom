@@ -1,34 +1,15 @@
 package api
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
 
+	deploymentdb "github.com/digitaleflex/axiom/services/engine/internal/database/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 )
-
-type deploymentRepo struct{ db *sql.DB }
-
-func (r deploymentRepo) Create(ctx context.Context, id, applicationID, serverID, environment string) error {
-	_, err := r.db.ExecContext(ctx, "INSERT INTO deployments (id, application_id, server_id, environment) VALUES ($1, $2, $3, $4)", id, applicationID, serverID, environment)
-	return err
-}
-
-func (r deploymentRepo) SetStatus(ctx context.Context, id, status string) error {
-	_, err := r.db.ExecContext(ctx, "UPDATE deployments SET status = $1 WHERE id = $2", status, id)
-	return err
-}
-
-func (r deploymentRepo) GetDomainRecord(ctx context.Context, id string) (deployment.Record, error) {
-	var v deployment.Record
-	err := r.db.QueryRowContext(ctx, "SELECT id, application_id, server_id, environment, status FROM deployments WHERE id = $1", id).
-		Scan(&v.ID, &v.ApplicationID, &v.ServerID, &v.Environment, &v.Status)
-	return v, err
-}
 
 type API struct {
 	db          *sql.DB
@@ -38,7 +19,7 @@ type API struct {
 func New(db *sql.DB) http.Handler {
 	a := &API{db: db}
 	if db != nil {
-		a.deployments = deployment.NewService(deploymentRepo{db: db}, deployment.NewEventBus())
+		a.deployments = deployment.NewService(deploymentdb.New(db), deployment.NewEventBus())
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/auth/me", a.me)
@@ -104,24 +85,20 @@ func (a *API) createDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		PlanID      string `json:"planId"`
-		ServerID    string `json:"serverId"`
-		Environment string `json:"environment"`
+		PlanID string `json:"planId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", "request body must be valid JSON", nil)
 		return
 	}
-	if strings.TrimSpace(input.PlanID) == "" || strings.TrimSpace(input.ServerID) == "" || strings.TrimSpace(input.Environment) == "" {
-		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", "planId, serverId and environment are required", nil)
-		return
-	}
-	record, err := a.deployments.CreateIdempotent(r.Context(), r.Header.Get("Idempotency-Key"), r.PathValue("applicationID"), input.ServerID, input.Environment, input.PlanID)
+	record, _, err := a.deployments.Create(r.Context(), deployment.CreateInput{
+		ApplicationID: r.PathValue("applicationID"), PlanID: strings.TrimSpace(input.PlanID), IdempotencyKey: r.Header.Get("Idempotency-Key"),
+	})
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "DEPLOYMENT_CREATE_FAILED", err.Error(), nil)
+		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error(), nil)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"id": record.ID, "status": record.Status, "accepted": true, "planId": record.PlanID})
+	writeJSON(w, http.StatusAccepted, map[string]any{"id": record.ID, "status": record.Status})
 }
 
 func (a *API) deploymentHealth(w http.ResponseWriter, _ *http.Request) {

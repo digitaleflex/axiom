@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
 )
 
@@ -16,7 +15,6 @@ type GitHubConnectionRepository struct{ db *sql.DB }
 type RepositoryRepository struct{ db *sql.DB }
 type ApplicationRepository struct{ db *sql.DB }
 type ServerRepository struct{ db *sql.DB }
-type DeploymentRepository struct{ db *sql.DB }
 
 type Repositories struct {
 	Users             UserRepository
@@ -24,7 +22,6 @@ type Repositories struct {
 	Repositories      RepositoryRepository
 	Applications      ApplicationRepository
 	Servers           ServerRepository
-	Deployments       DeploymentRepository
 }
 
 func NewRepositories(db *sql.DB) Repositories {
@@ -34,7 +31,6 @@ func NewRepositories(db *sql.DB) Repositories {
 		Repositories:      RepositoryRepository{db: db},
 		Applications:      ApplicationRepository{db: db},
 		Servers:           ServerRepository{db: db},
-		Deployments:       DeploymentRepository{db: db},
 	}
 }
 
@@ -104,31 +100,6 @@ func (r ServerRepository) UpdateHealth(ctx context.Context, id string, health se
 		WHERE id = $8
 	`, health.Status, health.AgentVersion, raw, health.CPUCount, health.MemoryMB, health.DiskFreeMB, health.LastSeenAt, id)
 	return wrap("update server health", err)
-}
-
-func (r DeploymentRepository) Create(ctx context.Context, id, applicationID, serverID, environment string) error {
-	_, err := r.db.ExecContext(ctx, `INSERT INTO deployments (id, application_id, server_id, environment) VALUES ($1, $2, $3, $4)`, id, applicationID, serverID, environment)
-	return wrap("create deployment", err)
-}
-
-func (r DeploymentRepository) SetStatus(ctx context.Context, id, status string) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE deployments SET status = $1 WHERE id = $2`, status, id)
-	return wrap("update deployment status", err)
-}
-
-func (r DeploymentRepository) Get(ctx context.Context, id string) (Deployment, error) {
-	var v Deployment
-	err := r.db.QueryRowContext(ctx, `SELECT id, application_id, server_id, environment, status FROM deployments WHERE id = $1`, id).
-		Scan(&v.ID, &v.ApplicationID, &v.ServerID, &v.Environment, &v.Status)
-	return v, wrap("get deployment", err)
-}
-
-func (r DeploymentRepository) GetDomainRecord(ctx context.Context, id string) (deployment.Record, error) {
-	v, err := r.Get(ctx, id)
-	if err != nil {
-		return deployment.Record{}, err
-	}
-	return deployment.Record{ID: v.ID, ApplicationID: v.ApplicationID, ServerID: v.ServerID, Environment: v.Environment, Status: deployment.State(v.Status)}, nil
 }
 
 func wrap(operation string, err error) error {

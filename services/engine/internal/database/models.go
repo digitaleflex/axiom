@@ -40,11 +40,3 @@ type Server struct {
 	DiskFreeMB   int
 	LastSeenAt   time.Time
 }
-
-type Deployment struct {
-	ID            string
-	ApplicationID string
-	ServerID      string
-	Environment   string
-	Status        string
-}

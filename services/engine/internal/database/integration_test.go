@@ -57,21 +57,6 @@ func TestPostgreSQLPersistence(t *testing.T) {
 	if err := repos.Servers.Create(ctx, ids.server, "local-test", "127.0.0.1"); err != nil {
 		t.Fatalf("create server: %v", err)
 	}
-	if err := repos.Deployments.Create(ctx, ids.deployment, ids.application, ids.server, "production"); err != nil {
-		t.Fatalf("create deployment: %v", err)
-	}
-	if err := repos.Deployments.SetStatus(ctx, ids.deployment, "BUILDING"); err != nil {
-		t.Fatalf("set deployment status: %v", err)
-	}
-
-	deployment, err := repos.Deployments.Get(ctx, ids.deployment)
-	if err != nil {
-		t.Fatalf("get deployment: %v", err)
-	}
-	if deployment.Status != "BUILDING" {
-		t.Fatalf("expected deployment status BUILDING, got %q", deployment.Status)
-	}
-
 	user, err := repos.Users.Get(ctx, ids.user)
 	if err != nil {
 		t.Fatalf("get user: %v", err)
