@@ -38,6 +38,7 @@ type Deps struct {
 	Repositories RepositoryDiscovery
 	Analyses     Analyses
 	Plans        Plans
+	Domains      Domains
 	// ConsoleURL is where the GitHub callback redirects the browser.
 	ConsoleURL string
 	// SecureCookies sets the Secure attribute on cookies (production).
@@ -55,6 +56,7 @@ type API struct {
 	repos        RepositoryDiscovery
 	analyses     Analyses
 	plans        Plans
+	domains      Domains
 	consoleURL   string
 	secure       bool
 	mux          *http.ServeMux
@@ -65,7 +67,7 @@ type API struct {
 func New(d Deps) http.Handler {
 	a := &API{
 		log: d.Log, auth: d.Auth, deployments: d.Deployments,
-		applications: d.Applications, servers: d.Servers, github: d.GitHub, repos: d.Repositories, analyses: d.Analyses, plans: d.Plans,
+		applications: d.Applications, servers: d.Servers, github: d.GitHub, repos: d.Repositories, analyses: d.Analyses, plans: d.Plans, domains: d.Domains,
 		consoleURL: d.ConsoleURL, secure: d.SecureCookies, mux: http.NewServeMux(),
 	}
 	if a.log == nil {
@@ -95,6 +97,12 @@ func New(d Deps) http.Handler {
 	r.HandleFunc("GET /api/v1/applications/{applicationID}/analysis/{analysisID}", a.wrap(a.getAnalysis))
 	r.HandleFunc("GET /api/v1/applications/{applicationID}/profile", a.wrap(a.getProfile))
 	r.HandleFunc("PUT /api/v1/applications/{applicationID}/profile/overrides", a.wrap(a.putOverrides))
+
+	r.HandleFunc("GET /api/v1/applications/{applicationID}/domains", a.wrap(a.listDomains))
+	r.HandleFunc("POST /api/v1/applications/{applicationID}/domains", a.wrap(a.addDomain))
+	r.HandleFunc("DELETE /api/v1/domains/{domainID}", a.wrap(a.removeDomain))
+	r.HandleFunc("POST /api/v1/domains/{domainID}/primary", a.wrap(a.setPrimaryDomain))
+	r.HandleFunc("POST /api/v1/domains/{domainID}/check", a.wrap(a.checkDomain))
 
 	r.HandleFunc("POST /api/v1/applications/{applicationID}/deployment-plans", a.wrap(a.createPlan))
 	r.HandleFunc("GET /api/v1/deployment-plans/{planID}", a.wrap(a.getPlan))

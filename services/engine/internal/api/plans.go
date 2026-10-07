@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/digitaleflex/axiom/services/engine/internal/domains"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner/validation"
 )
@@ -85,6 +86,16 @@ func planError(err error) (*Error, bool) {
 		return newError(http.StatusConflict, CodeConflict, "the application profile must be ready before planning", map[string]any{"reason": "profile_not_ready"}), true
 	case errors.Is(err, planner.ErrPlanNotFound):
 		return newError(http.StatusNotFound, CodeNotFound, "deployment plan not found", nil), true
+	case errors.Is(err, domains.ErrNotFound):
+		return newError(http.StatusNotFound, CodeNotFound, "domain not found", nil), true
+	case errors.Is(err, domains.ErrTaken):
+		return newError(http.StatusConflict, CodeConflict, "hostname is already in use", map[string]any{"reason": "hostname_taken"}), true
+	case errors.Is(err, domains.ErrPrimary):
+		return newError(http.StatusConflict, CodeConflict, "set another primary domain before removing this one", map[string]any{"reason": "primary_domain"}), true
+	case errors.Is(err, domains.ErrInvalidHostname):
+		return errValidation("invalid domain", map[string]any{"fields": map[string]any{"hostname": "must be a hostname such as app.example.com"}}), true
+	case errors.Is(err, domains.ErrNotRegistered):
+		return errValidation("the hostname is not registered for this application and environment", map[string]any{"fields": map[string]any{"domain": "register it first or use a registered hostname"}}), true
 	}
 	return nil, false
 }

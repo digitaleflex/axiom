@@ -624,27 +624,47 @@ A deployment cannot transition to `LIVE` before successful health verification.
 
 ## 17. Domains
 
+Traefik and Let's Encrypt remain implementation details behind the Engine boundary: the Engine stores hostnames, routing targets and verification state; the Runtime Agent (#84) configures routing and TLS on the server. Axiom serves applications over HTTP (port 80, redirecting to HTTPS) and HTTPS (port 443) with automatically issued certificates.
+
 ### List application domains
 
-`GET /api/v1/applications/{applicationId}/domains`
+`GET /api/v1/applications/{applicationId}/domains?environment={production|staging|preview}`
+
+```json
+{ "items": [ { "id": "dom_…", "applicationId": "app_…", "environment": "production",
+  "hostname": "app.example.com", "isPrimary": true,
+  "dnsStatus": "ok", "dnsExpected": "203.0.113.10", "dnsObserved": "203.0.113.10", "dnsCheckedAt": "…",
+  "tlsStatus": "valid", "routingStatus": "active",
+  "target": { "deploymentId": "dep_…", "serverId": "srv_…" } } ] }
+```
+
+`target` is the latest LIVE deployment in the environment (absent when nothing serves). Domain state is independent from application health.
 
 ### Add domain
 
 `POST /api/v1/applications/{applicationId}/domains`
 
-Request:
-
 ```json
-{
-  "hostname": "app.example.com"
-}
+{ "hostname": "app.example.com", "environment": "production" }
 ```
+
+Hostnames are normalized to lowercase (single-label names such as `localhost` allowed; no scheme, port or path) and globally unique (`409 hostname_taken`). The first domain of an environment becomes primary. Response `201 Created` (`Location: /api/v1/domains/{id}`).
 
 ### Remove domain
 
-`DELETE /api/v1/domains/{domainId}`
+`DELETE /api/v1/domains/{domainId}` → `204`. The primary hostname cannot be removed while other domains exist in its environment (`409 primary_domain`); removing the last one is allowed.
 
-Traefik and Let's Encrypt remain implementation details behind the Engine boundary.
+### Set primary domain
+
+`POST /api/v1/domains/{domainId}/primary` — marks the primary hostname used across the Console.
+
+### Check domain
+
+`POST /api/v1/domains/{domainId}/check` — verifies that the hostname resolves to the address serving the application (`dnsStatus`: `ok`, `mismatch`, `pending` when nothing serves yet, `error` when unresolvable), persists the result and returns it. TLS issuance state (`tlsStatus`) is reported by the Runtime Agent (#84).
+
+### Planning with a hostname
+
+`POST /applications/{id}/deployment-plans` accepts any registered hostname of the environment; the first hostname used is auto-registered as primary; any other unregistered hostname is rejected with `422` so traffic cannot be planned to a name the application does not own here.
 
 ---
 

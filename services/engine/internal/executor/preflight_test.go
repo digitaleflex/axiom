@@ -25,7 +25,7 @@ func (f fakeServerChecker) Get(_ context.Context, id string) (server.Record, err
 func readyServerRecord() server.Record {
 	return server.Record{ID: "srv_1", Name: "srv-eu-1", Status: server.StatusReady,
 		Capabilities: []server.Capability{server.CapabilityDocker, server.CapabilityTraefik, server.CapabilityTLS},
-		CPUCount: 4, MemoryMB: 8192, DiskFreeMB: 50000,
+		CPUCount:     4, MemoryMB: 8192, DiskFreeMB: 50000,
 		LastSeenAt: time.Now().UTC().Format(time.RFC3339)}
 }
 

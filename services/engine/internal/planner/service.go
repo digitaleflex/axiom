@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/digitaleflex/axiom/services/engine/internal/domains"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
 )
 
@@ -24,11 +25,17 @@ type Servers interface {
 	Get(ctx context.Context, id string) (server.Record, error)
 }
 
+// Domains resolves the hostname used for planning.
+type Domains interface {
+	EnsureDomain(ctx context.Context, applicationID, environment, hostname string) (domains.Record, bool, error)
+}
+
 // Service generates and persists plans.
 type Service struct {
 	Engine   *Engine
 	Profiles Profiles
 	Servers  Servers
+	Domains  Domains
 	DB       *sql.DB
 	NewID    func(prefix string) string
 }
@@ -50,6 +57,14 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Plan, error) {
 	srv, err := s.Servers.Get(ctx, in.ServerID)
 	if err != nil {
 		return Plan{}, err
+	}
+	if s.Domains != nil {
+		if _, _, err := s.Domains.EnsureDomain(ctx, in.ApplicationID, in.Environment, in.Domain); err != nil {
+			return Plan{}, err
+		}
+		if in.Domain, err = domains.Normalize(in.Domain); err != nil {
+			return Plan{}, err
+		}
 	}
 	caps := make([]string, 0, len(srv.Capabilities))
 	for _, c := range srv.Capabilities {

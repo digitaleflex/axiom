@@ -22,6 +22,7 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/database"
 	deploymentdb "github.com/digitaleflex/axiom/services/engine/internal/database/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
+	"github.com/digitaleflex/axiom/services/engine/internal/domains"
 	ghauth "github.com/digitaleflex/axiom/services/engine/internal/github/auth"
 	"github.com/digitaleflex/axiom/services/engine/internal/github/repos"
 	"github.com/digitaleflex/axiom/services/engine/internal/httpserver"
@@ -113,7 +114,9 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 	deps.EventStream = &sse.Handler{Store: deps.Deployments.Store(), Bus: deps.Deployments.Events(), Log: log, Shutdown: streams}
 	deps.Applications = database.NewApplicationStore(db)
 	deps.Servers = server.NewService(database.NewRepositories(db).Servers)
-	deps.Plans = &planner.Service{Engine: planner.New(), Profiles: analysis.PGStore{DB: db}, Servers: deps.Servers, DB: db, NewID: deployment.NewID}
+	domainService := &domains.Service{Store: domains.PGStore{DB: db}, Resolver: stdResolver{}}
+	deps.Domains = domainService
+	deps.Plans = &planner.Service{Engine: planner.New(), Profiles: analysis.PGStore{DB: db}, Servers: deps.Servers, Domains: domainService, DB: db, NewID: deployment.NewID}
 	if cfg.GitHub.Enabled() {
 		key, err := secrets.ParseKey(cfg.SecretKey)
 		if err != nil {
@@ -230,4 +233,19 @@ func (a *App) close() {
 		}
 		a.db = nil
 	}
+}
+
+// stdResolver resolves DNS through the system resolver.
+type stdResolver struct{}
+
+func (stdResolver) LookupIP(ctx context.Context, host string) ([]string, error) {
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, len(ips))
+	for i, ip := range ips {
+		out[i] = ip.String()
+	}
+	return out, nil
 }

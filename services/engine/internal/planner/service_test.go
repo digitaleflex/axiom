@@ -14,6 +14,7 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/database"
 	deploymentdb "github.com/digitaleflex/axiom/services/engine/internal/database/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
+	"github.com/digitaleflex/axiom/services/engine/internal/domains"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner"
 	"github.com/digitaleflex/axiom/services/engine/internal/profile"
 	"github.com/digitaleflex/axiom/services/engine/migrations"
@@ -67,7 +68,8 @@ func TestPlanLifecycleWithPostgreSQL(t *testing.T) {
 	if _, err := profiles.SaveProfile(ctx, "app_1", prof); err != nil {
 		t.Fatal(err)
 	}
-	svc := &planner.Service{Engine: planner.New(), Profiles: profiles, Servers: database.NewRepositories(db).Servers, DB: db, NewID: deployment.NewID}
+	svc := &planner.Service{Engine: planner.New(), Profiles: profiles, Servers: database.NewRepositories(db).Servers,
+		Domains: &domains.Service{Store: domains.PGStore{DB: db}, Resolver: stdResolver{}}, DB: db, NewID: deployment.NewID}
 
 	plan, err := svc.Create(ctx, planner.CreateInput{ApplicationID: "app_1", ServerID: "srv_1", Environment: "production", Domain: "app.acme.dev"})
 	if err != nil {
@@ -87,6 +89,24 @@ func TestPlanLifecycleWithPostgreSQL(t *testing.T) {
 	view, err := svc.Get(ctx, plan.ID)
 	if err != nil || view.Stale || view.DeploymentID != "" {
 		t.Fatalf("view = %+v %v", view, err)
+	}
+
+	// The plan domain was auto-registered as primary (first of the environment).
+	doms, err := svc.Domains.(*domains.Service).List(ctx, "app_1", "production")
+	if err != nil || len(doms) != 1 || !doms[0].IsPrimary || doms[0].Hostname != "app.acme.dev" {
+		t.Fatalf("auto-registered domains = %+v %v", doms, err)
+	}
+	// A different unregistered hostname is rejected while one exists.
+	if _, err := svc.Create(ctx, planner.CreateInput{ApplicationID: "app_1", ServerID: "srv_1", Environment: "production", Domain: "other.acme.dev"}); !errors.Is(err, domains.ErrNotRegistered) {
+		t.Fatalf("unregistered domain: %v", err)
+	}
+	// Another environment needs its own hostname (hostnames are global).
+	staging, err := svc.Create(ctx, planner.CreateInput{ApplicationID: "app_1", ServerID: "srv_1", Environment: "staging", Domain: "staging.acme.dev"})
+	if err != nil {
+		t.Fatalf("staging plan: %v", err)
+	}
+	if staging.Environment != "staging" {
+		t.Fatalf("staging plan = %+v", staging)
 	}
 
 	// The persisted plan is consumed by the deployment store (steps from body).
