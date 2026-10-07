@@ -51,12 +51,17 @@ The API version changes only for breaking contract changes.
 
 ## 2. Authentication
 
-V0.1 requires an authenticated user for protected endpoints.
+V0.1 requires an authenticated user for protected endpoints. Authentication is
+session-based (#125).
 
 ### Required request headers
 
+Browser clients authenticate with the HttpOnly `axiom_session` cookie (set by
+`/auth/register` and `/auth/login`). API clients may instead present the opaque
+session token as a bearer token:
+
 ```http
-Authorization: Bearer <access-token>
+Authorization: Bearer <session-token>
 Content-Type: application/json
 X-Request-ID: <optional-client-request-id>
 ```
@@ -67,16 +72,44 @@ For mutating operations that create or execute deployments:
 Idempotency-Key: <unique-operation-key>
 ```
 
+### CSRF protection
+
+Session cookies are `HttpOnly`, `SameSite=Lax` and `Secure` in production.
+Cookie-authenticated requests that mutate state (anything other than
+`GET`/`HEAD`/`OPTIONS`) must additionally echo the session's double-submit token:
+
+```http
+X-CSRF-Token: <csrf-token>
+```
+
+The CSRF token is returned in the `/auth/register` and `/auth/login` response
+body and on `GET /auth/me` (so a reloaded browser client can re-acquire it).
+Bearer API clients are exempt from CSRF checks. A missing or invalid token →
+`403 FORBIDDEN` (`details.reason = "csrf"`).
+
 ### Authentication endpoints
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| GET | `/api/v1/auth/me` | Return current user (`{ "id", "name" }`) |
-| POST | `/api/v1/auth/logout` | End current session (`204`) |
+| POST | `/api/v1/auth/register` | Create an account and start a session (`201`); body `{ email, password, name? }` → `{ user, csrfToken, expiresAt }` |
+| POST | `/api/v1/auth/login` | Verify credentials and start a session (`200`); body `{ email, password }` → `{ user, csrfToken, expiresAt }` |
+| GET | `/api/v1/auth/me` | Return the current user (`{ id, name, csrfToken }`) |
+| POST | `/api/v1/auth/logout` | Revoke the current session and clear the cookie (`204`) |
+| GET | `/api/v1/auth/sessions` | List active sessions (never returns tokens or CSRF secrets) |
+| DELETE | `/api/v1/auth/sessions/{sessionId}` | Revoke one owned session (`204`) |
+| DELETE | `/api/v1/auth/sessions` | Revoke all sessions except the current one |
 
-Interim (until #125): a single bearer token configured with `AXIOM_API_TOKEN` (required in production); development without a token authenticates as a local operator. Missing/invalid credentials → `401 UNAUTHORIZED` with `WWW-Authenticate: Bearer`.
+Login failures are generic (`email or password is incorrect`) and do not
+disclose whether the account exists. Missing, expired or revoked credentials →
+`401 UNAUTHORIZED` with `WWW-Authenticate: Bearer`. Session tokens are random
+32-byte values; only their SHA-256 hash is persisted and they are never logged.
+Passwords are salted and hashed (see #125).
 
-The concrete identity provider is an implementation detail of the Engine and must not leak into the deployment API.
+`AXIOM_API_TOKEN`, when configured, remains a documented static machine-access
+escape hatch and authenticates as a service principal. The concrete identity
+provider is an implementation detail of the Engine and must not leak into the
+deployment API.
+
 
 ---
 

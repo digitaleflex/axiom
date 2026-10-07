@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func env(m map[string]string) func(string) (string, bool) {
@@ -81,6 +82,48 @@ func TestErrorsNeverLeakDatabaseCredentials(t *testing.T) {
 }
 
 const testKey = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="
+
+func TestSessionDefaults(t *testing.T) {
+	cfg, err := LoadFrom(env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SessionTTL != 720*time.Hour {
+		t.Fatalf("SessionTTL = %v, want 720h", cfg.SessionTTL)
+	}
+	if cfg.CookieSecure {
+		t.Fatal("session cookie must not be Secure by default outside production")
+	}
+}
+
+func TestSessionSettings(t *testing.T) {
+	base := map[string]string{
+		"AXIOM_ENV": "production", "DATABASE_URL": "postgres://db/axiom",
+		"AXIOM_API_TOKEN": strings.Repeat("a", 32), "AXIOM_SECRET_KEY": testKey,
+	}
+	cfg, err := LoadFrom(env(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.CookieSecure {
+		t.Fatal("session cookie must default to Secure in production")
+	}
+	base["AXIOM_COOKIE_SECURE"] = "false"
+	base["AXIOM_SESSION_TTL"] = "1h"
+	cfg, err = LoadFrom(env(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CookieSecure || cfg.SessionTTL != time.Hour {
+		t.Fatalf("explicit session settings ignored: %+v", cfg)
+	}
+	if _, err := LoadFrom(env(map[string]string{"AXIOM_SESSION_TTL": "0s"})); err == nil {
+		t.Fatal("zero session TTL must be rejected")
+	}
+	if _, err := LoadFrom(env(map[string]string{"AXIOM_SESSION_TTL": "soon"})); err == nil {
+		t.Fatal("invalid session TTL must be rejected")
+	}
+}
 
 func TestGitHubConfiguration(t *testing.T) {
 	base := map[string]string{"AXIOM_GITHUB_CLIENT_ID": "Iv1.abc", "AXIOM_GITHUB_CLIENT_SECRET": "s", "AXIOM_GITHUB_REDIRECT_URL": "https://engine.example.com/api/v1/github/callback"}

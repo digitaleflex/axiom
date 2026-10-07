@@ -10,6 +10,7 @@ import (
 
 	"github.com/digitaleflex/axiom/services/engine/internal/agentauth"
 	"github.com/digitaleflex/axiom/services/engine/internal/application"
+	"github.com/digitaleflex/axiom/services/engine/internal/auth"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
 )
@@ -31,8 +32,11 @@ type ServerStore = Servers
 // Deps are the API dependencies, injected by the composition root.
 // A nil dependency makes the corresponding endpoints answer 503.
 type Deps struct {
-	Log          *slog.Logger
-	Auth         Authenticator
+	Log  *slog.Logger
+	Auth Authenticator
+	// Sessions is the user authentication & session service (#125). A nil
+	// service makes the auth endpoints answer 503.
+	Sessions     *auth.Service
 	Deployments  *deployment.Service
 	Applications application.Store
 	Servers      ServerStore
@@ -55,6 +59,7 @@ type Deps struct {
 type API struct {
 	log          *slog.Logger
 	auth         Authenticator
+	authSvc      *auth.Service
 	deployments  *deployment.Service
 	applications application.Store
 	servers      ServerStore
@@ -74,7 +79,7 @@ type API struct {
 // request ID → recover → access log → authentication → routes.
 func New(d Deps) http.Handler {
 	a := &API{
-		log: d.Log, auth: d.Auth, deployments: d.Deployments,
+		log: d.Log, auth: d.Auth, authSvc: d.Sessions, deployments: d.Deployments,
 		applications: d.Applications, servers: d.Servers, github: d.GitHub, repos: d.Repositories, analyses: d.Analyses, plans: d.Plans, domains: d.Domains, logs: d.Logs,
 		agents:     d.Agents,
 		consoleURL: d.ConsoleURL, secure: d.SecureCookies, mux: http.NewServeMux(),
@@ -87,8 +92,13 @@ func New(d Deps) http.Handler {
 	}
 
 	r := a.mux
+	r.HandleFunc("POST /api/v1/auth/register", a.wrap(a.register))
+	r.HandleFunc("POST /api/v1/auth/login", a.wrap(a.login))
 	r.HandleFunc("GET /api/v1/auth/me", a.wrap(a.me))
 	r.HandleFunc("POST /api/v1/auth/logout", a.wrap(a.logout))
+	r.HandleFunc("GET /api/v1/auth/sessions", a.wrap(a.listSessions))
+	r.HandleFunc("DELETE /api/v1/auth/sessions", a.wrap(a.revokeOtherSessions))
+	r.HandleFunc("DELETE /api/v1/auth/sessions/{sessionID}", a.wrap(a.revokeSession))
 
 	r.HandleFunc("POST /api/v1/github/connections", a.wrap(a.startGitHubConnection))
 	r.HandleFunc("GET /api/v1/github/connections", a.wrap(a.listGitHubConnections))

@@ -42,7 +42,12 @@ type Config struct {
 	// SecretKey (base64, 32 bytes) encrypts tokens at rest. Required in
 	// production and whenever GitHub is configured. Never logged.
 	SecretKey string
-	GitHub    GitHubConfig
+	// SessionTTL is the lifetime of a user session (#125). Default 720h.
+	SessionTTL time.Duration
+	// CookieSecure sets the Secure attribute on the session cookie. Defaults
+	// to true in production.
+	CookieSecure bool
+	GitHub       GitHubConfig
 	// ConsoleURL is where browser flows (GitHub callback) return to.
 	ConsoleURL string
 }
@@ -92,6 +97,8 @@ func LoadFrom(lookup func(string) (string, bool)) (Config, error) {
 	}
 	cfg.APIToken = r.str("AXIOM_API_TOKEN", "")
 	cfg.SecretKey = r.str("AXIOM_SECRET_KEY", "")
+	cfg.SessionTTL = r.duration("AXIOM_SESSION_TTL", 720*time.Hour)
+	cfg.CookieSecure = r.bool("AXIOM_COOKIE_SECURE", cfg.Env == EnvProduction)
 	cfg.ConsoleURL = strings.TrimRight(r.str("AXIOM_CONSOLE_URL", "http://localhost:5173"), "/")
 	cfg.GitHub = GitHubConfig{
 		ClientID:     r.str("AXIOM_GITHUB_CLIENT_ID", ""),
@@ -149,6 +156,9 @@ func (c Config) Validate() error {
 	}
 	if c.Env == EnvProduction && c.SecretKey == "" {
 		errs = append(errs, errors.New("AXIOM_SECRET_KEY is required in production"))
+	}
+	if c.SessionTTL <= 0 {
+		errs = append(errs, errors.New("AXIOM_SESSION_TTL must be a positive duration"))
 	}
 	if g := c.GitHub; g.ClientID != "" || g.ClientSecret != "" || g.RedirectURL != "" {
 		if g.ClientID == "" || g.ClientSecret == "" || g.RedirectURL == "" {

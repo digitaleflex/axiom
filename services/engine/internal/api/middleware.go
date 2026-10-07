@@ -90,6 +90,15 @@ func (a *API) recoverer(next http.Handler) http.Handler {
 type Principal struct {
 	UserID string `json:"id"`
 	Name   string `json:"name"`
+
+	// SessionID identifies the current session for session-based auth.
+	SessionID string `json:"-"`
+	// CSRFToken is the double-submit token required on mutating cookie-auth
+	// requests. It is never the session token and is omitted from listings.
+	CSRFToken string `json:"-"`
+	// CookieAuth reports whether the request authenticated with the session
+	// cookie (subject to CSRF checks) rather than a bearer token.
+	CookieAuth bool `json:"-"`
 }
 
 func principal(ctx context.Context) Principal {
@@ -139,9 +148,44 @@ type denyAll struct{}
 
 func (denyAll) Authenticate(*http.Request) (Principal, error) { return Principal{}, ErrUnauthenticated }
 
+// isPublicPath reports routes that bypass the user authenticator: the GitHub
+// browser callback (single-use state + browser cookie) and the sign-up /
+// sign-in endpoints themselves.
+func isPublicPath(path string) bool {
+	switch path {
+	case githubCallbackPath, "/api/v1/auth/register", "/api/v1/auth/login":
+		return true
+	}
+	return false
+}
+
+// mutatingMethod reports whether the method changes server state and is
+// therefore subject to CSRF protection for cookie-authenticated requests.
+func mutatingMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	}
+	return true
+}
+
+// enforceCSRF applies double-submit CSRF protection. Bearer API clients are
+// exempt; cookie-authenticated mutating requests must echo the session's CSRF
+// token in X-CSRF-Token.
+func enforceCSRF(r *http.Request, p Principal) error {
+	if !p.CookieAuth || !mutatingMethod(r.Method) {
+		return nil
+	}
+	got := r.Header.Get(csrfHeader)
+	if got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(p.CSRFToken)) != 1 {
+		return newError(http.StatusForbidden, CodeForbidden, "CSRF token missing or invalid", map[string]any{"reason": "csrf"})
+	}
+	return nil
+}
+
 func (a *API) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == githubCallbackPath {
+		if isPublicPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -149,6 +193,10 @@ func (a *API) authenticate(next http.Handler) http.Handler {
 		if err != nil {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="axiom"`)
 			a.writeError(w, r, newError(http.StatusUnauthorized, CodeUnauthorized, "authentication is required", nil))
+			return
+		}
+		if err := enforceCSRF(r, p); err != nil {
+			a.writeError(w, r, err)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey, p)))

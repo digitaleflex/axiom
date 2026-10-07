@@ -44,7 +44,7 @@ func TestStartServeAndGracefulShutdown(t *testing.T) {
 	go func() { done <- app.Serve(ctx, ln) }()
 
 	base := "http://" + ln.Addr().String()
-	for _, path := range []string{"/health", "/ready"} {
+	for _, path := range []string{"/health", "/ready", "/metrics"} {
 		resp, err := http.Get(base + path)
 		if err != nil {
 			t.Fatal(err)

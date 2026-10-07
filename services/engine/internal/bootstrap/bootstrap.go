@@ -19,6 +19,7 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/analysis"
 	"github.com/digitaleflex/axiom/services/engine/internal/api"
 	"github.com/digitaleflex/axiom/services/engine/internal/api/sse"
+	"github.com/digitaleflex/axiom/services/engine/internal/auth"
 	"github.com/digitaleflex/axiom/services/engine/internal/config"
 	"github.com/digitaleflex/axiom/services/engine/internal/database"
 	deploymentdb "github.com/digitaleflex/axiom/services/engine/internal/database/deployment"
@@ -28,6 +29,7 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/github/repos"
 	"github.com/digitaleflex/axiom/services/engine/internal/httpserver"
 	"github.com/digitaleflex/axiom/services/engine/internal/logs"
+	"github.com/digitaleflex/axiom/services/engine/internal/observability/metrics"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner"
 	"github.com/digitaleflex/axiom/services/engine/internal/security/secrets"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
@@ -70,7 +72,15 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 		}
 		return nil, err
 	}
-	handler := httpserver.NewHandler(cfg, db, api.New(deps))
+	registry, err := metrics.NewEngineRegistry()
+	if err != nil {
+		cancelStreams()
+		if db != nil {
+			_ = db.Close()
+		}
+		return nil, err
+	}
+	handler := httpserver.NewHandler(cfg, db, api.New(deps), httpserver.WithMetrics(registry))
 	app := &App{
 		cfg:           cfg,
 		streams:       streams,
@@ -95,22 +105,35 @@ var localOperator = api.Principal{UserID: "usr_local", Name: "Local operator"}
 // buildAPIDeps wires stores and services. Without a database, data endpoints
 // answer 503 SERVICE_UNAVAILABLE instead of serving in-memory state.
 func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *sql.DB, streams context.Context) (api.Deps, error) {
-	deps := api.Deps{Log: log, ConsoleURL: cfg.ConsoleURL, SecureCookies: cfg.Env == config.EnvProduction}
-	switch {
-	case cfg.APIToken != "":
-		deps.Auth = api.NewTokenAuthenticator(cfg.APIToken, localOperator)
-	case cfg.Env == config.EnvDevelopment:
-		log.Warn("API authentication disabled: development mode without AXIOM_API_TOKEN")
-		deps.Auth = api.DevAuthenticator{Principal: localOperator}
-	default:
-		log.Warn("no API authenticator configured; all /api/v1 requests will be rejected")
-	}
+	deps := api.Deps{Log: log, ConsoleURL: cfg.ConsoleURL, SecureCookies: cfg.CookieSecure}
 	if db == nil {
+		switch {
+		case cfg.APIToken != "":
+			deps.Auth = api.NewTokenAuthenticator(cfg.APIToken, localOperator)
+		case cfg.Env == config.EnvDevelopment:
+			log.Warn("API authentication disabled: development mode without AXIOM_API_TOKEN")
+			deps.Auth = api.DevAuthenticator{Principal: localOperator}
+		default:
+			log.Warn("no API authenticator configured; all /api/v1 requests will be rejected")
+		}
 		return deps, nil
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO users (id, display_name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`,
 		localOperator.UserID, localOperator.Name); err != nil {
 		return api.Deps{}, fmt.Errorf("ensure local operator: %w", err)
+	}
+	// User authentication & sessions (#125). The static AXIOM_API_TOKEN, when
+	// configured, remains a documented machine-access escape hatch.
+	authSvc := auth.NewService(auth.NewPGStore(db), auth.WithSessionTTL(cfg.SessionTTL))
+	deps.Sessions = authSvc
+	switch {
+	case cfg.APIToken != "":
+		deps.Auth = api.NewSessionAuthenticator(authSvc, cfg.APIToken, localOperator)
+	case cfg.Env == config.EnvDevelopment:
+		log.Warn("API authentication disabled: development mode without AXIOM_API_TOKEN")
+		deps.Auth = api.DevAuthenticator{Principal: localOperator}
+	default:
+		deps.Auth = api.NewSessionAuthenticator(authSvc, "", localOperator)
 	}
 	deps.Deployments = deployment.NewService(deploymentdb.New(db), deployment.NewEventBus())
 	deps.EventStream = &sse.Handler{Store: deps.Deployments.Store(), Bus: deps.Deployments.Events(), Log: log, Shutdown: streams}

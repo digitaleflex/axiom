@@ -14,19 +14,6 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
 )
 
-// --- auth ---------------------------------------------------------------------
-
-func (a *API) me(w http.ResponseWriter, r *http.Request) error {
-	writeJSON(w, http.StatusOK, principal(r.Context()))
-	return nil
-}
-
-// logout is a no-op for the interim bearer token; sessions arrive with #125.
-func (a *API) logout(w http.ResponseWriter, _ *http.Request) error {
-	w.WriteHeader(http.StatusNoContent)
-	return nil
-}
-
 // --- applications -------------------------------------------------------------
 
 func (a *API) listApplications(w http.ResponseWriter, r *http.Request) error {
