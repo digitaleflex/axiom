@@ -1,8 +1,17 @@
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { generatePlan, getApplication, getProfile, listServers } from '../api/resources'
-import type { ConfigRequirement } from '../api/types'
+import {
+  deleteConfiguration,
+  generatePlan,
+  getApplication,
+  getProfile,
+  isValidConfigName,
+  listConfiguration,
+  listServers,
+  setConfiguration,
+} from '../api/resources'
 import { ApiError } from '../api/errors'
+import { ConfirmButton } from '../components/ConfirmButton'
 import { EnvironmentChip } from '../components/shell/EnvironmentChip'
 import { PageHeader } from '../components/shell/PageHeader'
 import { SecretField } from '../components/SecretField'
@@ -19,12 +28,16 @@ const ENVIRONMENT_MEANINGS: Record<Environment, string> = {
   preview: 'Temporary review build',
 }
 
-interface ConfigValue {
+/** Draft key for the "add a variable" row (never a real configuration name). */
+const NEW_VARIABLE_KEY = '__new__'
+
+/** A configuration row: profile requirement metadata merged with stored state. */
+interface ConfigRow {
   name: string
-  required?: boolean
-  secret?: boolean
+  required: boolean
+  secret: boolean
   isSet: boolean
-  draft: string
+  updatedAt?: string
 }
 
 /**
@@ -33,6 +46,10 @@ interface ConfigValue {
  * Collects the planner inputs — environment, server, ref, domain, config
  * values — with safe defaults visible. Nothing deploys from this screen;
  * Review plan generates a plan and opens the Plan screen.
+ *
+ * Configuration values (#126) are write-only: the list endpoint returns
+ * metadata only, values are saved through `SecretField` and after saving the
+ * UI only ever shows "set" — never the value.
  */
 export function ConfigurePage() {
   const { applicationId } = useParams<{ applicationId: string }>()
@@ -41,10 +58,13 @@ export function ConfigurePage() {
 
   const [environment, setEnvironment] = useState<Environment | undefined>(undefined)
   const [domain, setDomain] = useState('')
-  const [values, setValues] = useState<ConfigValue[]>([])
-  const [extraName, setExtraName] = useState('')
   const [generating, setGenerating] = useState(false)
   const [errors, setErrors] = useState<string[]>([])
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [editing, setEditing] = useState<ReadonlySet<string>>(new Set())
+  const [newName, setNewName] = useState('')
+  const [configError, setConfigError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
   const appState = useAsync(
     (signal) => (applicationId ? getApplication(applicationId, { signal }) : Promise.reject(new Error('missing id'))),
@@ -58,48 +78,108 @@ export function ConfigurePage() {
 
   const serversState = useAsync((signal) => listServers({}, { signal }), [])
 
+  const configState = useAsync(
+    (signal) => (applicationId ? listConfiguration(applicationId, { signal }) : Promise.reject(new Error('missing id'))),
+    [applicationId],
+  )
+
   const profile = profileState.data
   const servers = serversState.data ?? []
   // The server is chosen in the Server selection step; this screen shows the
   // effective target and links back to change it.
   const server = servers.find((s) => s.status === 'ready') ?? servers[0]
 
-  // Initialize config value rows from the profile's requirements.
+  // Rows merge profile requirements (required/secret flags) with the stored
+  // metadata from GET /configuration (isSet/updatedAt). Values themselves
+  // are never part of this merge — the API does not return them.
+  const configItems = configState.data ?? []
   const requirements = profile?.configuration ?? []
-  const configValues: ConfigValue[] = [
-    ...requirements.map((req: ConfigRequirement) => ({
+  const rows: ConfigRow[] = []
+  for (const req of requirements) {
+    const item = configItems.find((c) => c.name === req.name)
+    rows.push({
       name: req.name,
-      required: req.required,
-      secret: req.secret,
-      isSet: false,
-      draft: '',
-    })),
-    ...values.filter((v) => !requirements.some((r) => r.name === v.name)),
-  ]
+      required: req.required ?? false,
+      secret: item?.secret ?? req.secret ?? true,
+      isSet: item?.isSet ?? false,
+      updatedAt: item?.updatedAt,
+    })
+  }
+  for (const item of configItems) {
+    if (!rows.some((r) => r.name === item.name)) {
+      rows.push({ name: item.name, required: false, secret: item.secret, isSet: item.isSet, updatedAt: item.updatedAt })
+    }
+  }
 
-  const missingRequired = configValues.filter((v) => v.required && !v.isSet).map((v) => v.name)
-  const domainInvalid = domain !== '' && !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i.test(domain)
+  const missingRequired = rows.filter((r) => r.required && !r.isSet).map((r) => r.name)
+  const domainInvalid = domain !== '' && !/^[a-z0-9]([a-z0-9-]*[a-z0-9])(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i.test(domain)
 
-  const setValue = (name: string, draft: string) => {
-    setValues((prev) => {
-      const existing = prev.find((v) => v.name === name)
-      if (existing) {
-        return prev.map((v) => (v.name === name ? { ...v, draft, isSet: draft !== '' } : v))
-      }
-      return [...prev, { name, draft, isSet: draft !== '' }]
+  const startEdit = (name: string) => {
+    setEditing((prev) => new Set(prev).add(name))
+    setDrafts((prev) => ({ ...prev, [name]: '' }))
+  }
+
+  const cancelEdit = (name: string) => {
+    setEditing((prev) => {
+      const next = new Set(prev)
+      next.delete(name)
+      return next
+    })
+    setDrafts((prev) => {
+      const next = { ...prev }
+      delete next[name]
+      return next
     })
   }
 
-  const removeValue = (name: string) => {
-    setValues((prev) => prev.filter((v) => v.name !== name))
+  const persistValue = async (name: string, value: string, secret: boolean) => {
+    if (!applicationId || value === '') return
+    setBusy(true)
+    setConfigError(null)
+    try {
+      await setConfiguration(applicationId, name, value, secret)
+      push({ variant: 'success', title: 'Value saved', body: `${name} is set — it is injected at deploy time.` })
+      cancelEdit(name)
+      configState.reload()
+    } catch (cause) {
+      const error = cause instanceof ApiError ? cause : ApiError.network()
+      setConfigError(error.message)
+      push({ variant: 'failure', title: "Couldn't save value", body: error.message })
+    } finally {
+      setBusy(false)
+    }
   }
 
-  const addExtra = () => {
-    const name = extraName.trim()
-    if (!name) return
-    if (configValues.some((v) => v.name === name)) return
-    setValues((prev) => [...prev, { name, draft: '', isSet: false }])
-    setExtraName('')
+  const removeValue = async (name: string) => {
+    if (!applicationId) return
+    setBusy(true)
+    setConfigError(null)
+    try {
+      await deleteConfiguration(applicationId, name)
+      push({ variant: 'success', title: 'Value removed', body: `${name} was removed.` })
+      cancelEdit(name)
+      configState.reload()
+    } catch (cause) {
+      const error = cause instanceof ApiError ? cause : ApiError.network()
+      setConfigError(error.message)
+      push({ variant: 'failure', title: "Couldn't remove value", body: error.message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const addVariable = async () => {
+    const name = newName.trim()
+    if (!applicationId || !isValidConfigName(name)) return
+    const value = drafts[NEW_VARIABLE_KEY] ?? ''
+    if (value === '') return
+    await persistValue(name, value, true)
+    setNewName('')
+    setDrafts((prev) => {
+      const next = { ...prev }
+      delete next[NEW_VARIABLE_KEY]
+      return next
+    })
   }
 
   const reviewPlan = async () => {
@@ -135,6 +215,9 @@ export function ConfigurePage() {
       setGenerating(false)
     }
   }
+
+  const newNameValid = isValidConfigName(newName)
+  const newDraft = drafts[NEW_VARIABLE_KEY] ?? ''
 
   return (
     <>
@@ -243,60 +326,114 @@ export function ConfigurePage() {
 
         <section className="card" aria-label="Configuration values">
           <h2 className="section-title">Configuration values</h2>
-          {configValues.length === 0 ? (
-            <p className="muted">No configuration requirements from the profile.</p>
-          ) : (
-            <div className="stack" style={{ gap: 12 }}>
-              {configValues.map((value) => (
-                <div className="config-value-row" key={value.name}>
-                  <div className="config-value-row__name">
-                    <span className="mono">{value.name}</span>
-                    <span className="muted">
-                      {value.required ? ' · required' : ''}
-                      {value.secret ? ' · Secret' : ''}
-                    </span>
-                  </div>
-                  {value.secret ? (
-                    <SecretField
-                      name={value.name}
-                      isSet={value.isSet}
-                      required={value.required}
-                      onChange={(draft) => setValue(value.name, draft)}
-                      onReplace={() => setValue(value.name, '')}
-                      onRemove={() => removeValue(value.name)}
-                    />
-                  ) : (
-                    <div className="secret-field">
-                      <input
-                        className="field__input"
-                        type="text"
-                        value={value.draft}
-                        placeholder={value.required ? 'Required' : 'Optional'}
-                        autoComplete="off"
-                        aria-label={value.name}
-                        onChange={(event) => setValue(value.name, event.target.value)}
-                      />
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
+          <InlineNotice variant="info" title="Values are injected at deploy time">
+            Axiom stores configuration values encrypted and injects them into the application&apos;s environment
+            when a deployment runs. Saved values are write-only: they are never displayed, logged or returned by
+            the API.
+          </InlineNotice>
+
+          {configState.status === 'error' && configState.error && (
+            <ErrorPanel error={configState.error} objectName="configuration values" onRetry={configState.reload} />
           )}
 
-          <div className="row" style={{ marginTop: 12 }}>
-            <input
-              className="field__input"
-              type="text"
-              placeholder="Variable name"
-              value={extraName}
-              onChange={(event) => setExtraName(event.target.value)}
-              aria-label="New variable name"
-              style={{ flex: '1 1 auto' }}
-            />
-            <button type="button" className="btn btn--secondary" onClick={addExtra}>
-              + Add variable
-            </button>
-          </div>
+          {configState.status === 'loading' && <SkeletonLines lines={3} />}
+
+          {configState.status === 'success' && (
+            <>
+              {configError && (
+                <InlineNotice variant="failed" title="Couldn't save value">
+                  {configError}
+                </InlineNotice>
+              )}
+
+              {rows.length === 0 ? (
+                <p className="muted">No configuration requirements from the profile — add a variable below.</p>
+              ) : (
+                <div className="stack" style={{ gap: 12 }}>
+                  {rows.map((row) => {
+                    const isEditing = editing.has(row.name)
+                    return (
+                      <div className="config-value-row" key={row.name}>
+                        <div className="config-value-row__name">
+                          <span className="mono">{row.name}</span>
+                          <span className="muted">
+                            {row.required ? ' · required' : ''}
+                            {row.secret ? ' · secret' : ''}
+                            {row.isSet && !isEditing && row.updatedAt ? ` · updated ${row.updatedAt}` : ''}
+                          </span>
+                        </div>
+                        {row.isSet && !isEditing ? (
+                          <div className="row" style={{ alignItems: 'center', gap: 8 }}>
+                            <SecretField
+                              key={`${row.name}:set`}
+                              name={row.name}
+                              isSet
+                              required={row.required}
+                              onReplace={() => startEdit(row.name)}
+                            />
+                            <ConfirmButton
+                              label="Remove"
+                              confirmLabel="Confirm remove"
+                              className="btn btn--destructive btn--sm"
+                              disabled={busy}
+                              onConfirm={() => void removeValue(row.name)}
+                            />
+                          </div>
+                        ) : (
+                          <SecretField
+                            key={`${row.name}:edit`}
+                            name={row.name}
+                            isSet={false}
+                            required={row.required}
+                            onChange={(value) =>
+                              setDrafts((prev) => ({ ...prev, [row.name]: value }))
+                            }
+                            onSave={() => void persistValue(row.name, drafts[row.name] ?? '', row.secret)}
+                            onCancel={() => cancelEdit(row.name)}
+                            saveDisabled={busy || (drafts[row.name] ?? '') === ''}
+                          />
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              <div className="row" style={{ marginTop: 12, alignItems: 'center', gap: 8 }}>
+                <input
+                  className="field__input"
+                  type="text"
+                  placeholder="Variable name (e.g. API_KEY)"
+                  value={newName}
+                  onChange={(event) => setNewName(event.target.value.trim())}
+                  aria-label="New variable name"
+                  aria-invalid={newName !== '' && !newNameValid}
+                  style={{ flex: '1 1 auto' }}
+                />
+                {newName !== '' && !newNameValid && <span className="muted">Names match ^[A-Z_][A-Z0-9_]*$</span>}
+              </div>
+              {newNameValid && !rows.some((r) => r.name === newName) && (
+                <div className="row" style={{ marginTop: 8, alignItems: 'center' }}>
+                  <SecretField
+                    key={newName}
+                    name={newName}
+                    isSet={false}
+                    onChange={(value) => setDrafts((prev) => ({ ...prev, [NEW_VARIABLE_KEY]: value }))}
+                    onSave={() => void addVariable()}
+                    onCancel={() => {
+                      setNewName('')
+                      setDrafts((prev) => {
+                        const next = { ...prev }
+                        delete next[NEW_VARIABLE_KEY]
+                        return next
+                      })
+                    }}
+                    saveDisabled={busy || newDraft === ''}
+                  />
+                </div>
+              )}
+            </>
+          )}
         </section>
 
         <section className="card" aria-label="Runtime">
