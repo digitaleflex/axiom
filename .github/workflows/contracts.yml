@@ -2,10 +2,10 @@ name: Contracts
 
 on:
   pull_request:
-    paths: ["schemas/**", "tests/contracts/**"]
+    paths: ["schemas/**", "tests/contracts/**", "services/engine/internal/profile/testdata/**"]
   push:
     branches: [main]
-    paths: ["schemas/**", "tests/contracts/**"]
+    paths: ["schemas/**", "tests/contracts/**", "services/engine/internal/profile/testdata/**"]
 
 permissions:
   contents: read

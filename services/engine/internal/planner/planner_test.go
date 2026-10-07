@@ -1,22 +1,29 @@
 package planner
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/digitaleflex/axiom/services/engine/internal/profile"
+)
+
+func readyProfile() profile.Profile {
+	return profile.Profile{
+		Status: profile.StatusReady, Preset: "nextjs", Version: 3,
+		PackageManager:    profile.Field[string]{Value: "pnpm", Provenance: profile.ProvenanceDetected},
+		BuildCommand:      profile.Field[string]{Value: "pnpm run build", Provenance: profile.ProvenanceDetected},
+		StartCommand:      profile.Field[string]{Value: "pnpm start", Provenance: profile.ProvenanceDetected},
+		Port:              profile.Field[int]{Value: 3000, Provenance: profile.ProvenanceDefault},
+		ContainerStrategy: profile.Field[string]{Value: "source", Provenance: profile.ProvenanceDefault},
+		HealthCheck:       profile.Field[profile.HealthCheck]{Value: profile.HealthCheck{Type: "http", Path: "/"}, Provenance: profile.ProvenanceDefault},
+	}
+}
 
 func TestGeneratePlan(t *testing.T) {
-	engine := New()
-	plan, err := engine.Generate(
-		ApplicationProfile{
-			Language: "TypeScript", Framework: "Next.js", PackageManager: "pnpm",
-			BuildCommand: "pnpm build", StartCommand: "pnpm start", Port: 3000,
-			ContainerStrategy: "docker", Confidence: 0.98,
-		},
-		ServerProfile{ID: "srv_1", Status: "READY"},
-		"app.example.com",
-	)
+	plan, err := New().Generate(readyProfile(), ServerProfile{ID: "srv_1", Status: "READY"}, "app.example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Strategy != "docker" || plan.Network.Proxy != "traefik" || !plan.Network.TLS {
+	if plan.Strategy != "nextjs" || plan.ApplicationProfileVersion != 3 || plan.Network.Proxy != "traefik" || !plan.Network.TLS || plan.Runtime.Port != 3000 {
 		t.Fatalf("unexpected plan: %+v", plan)
 	}
 	if len(plan.Steps) != 5 {
@@ -24,13 +31,13 @@ func TestGeneratePlan(t *testing.T) {
 	}
 }
 
-func TestGeneratePlanRejectsUnreadyServer(t *testing.T) {
-	_, err := New().Generate(
-		ApplicationProfile{Language: "Go", BuildCommand: "go build ./...", StartCommand: "./app", Port: 8080, Confidence: 1},
-		ServerProfile{ID: "srv_1", Status: "OFFLINE"},
-		"app.example.com",
-	)
-	if err == nil {
+func TestGeneratePlanRejectsUnreadyInputs(t *testing.T) {
+	if _, err := New().Generate(readyProfile(), ServerProfile{ID: "srv_1", Status: "OFFLINE"}, "app.example.com"); err == nil {
 		t.Fatal("expected unready server to be rejected")
+	}
+	p := readyProfile()
+	p.Status = profile.StatusNeedsReview
+	if _, err := New().Generate(p, ServerProfile{ID: "srv_1", Status: "READY"}, "app.example.com"); err == nil {
+		t.Fatal("profiles that need review must not be planned")
 	}
 }

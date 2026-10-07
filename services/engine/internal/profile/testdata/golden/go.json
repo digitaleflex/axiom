@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "version": 0,
+  "analyzerVersion": "evidence/1.0.0",
+  "source": {
+    "repositoryId": "repo_1",
+    "ref": "main",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "root": ""
+  },
+  "status": "ready",
+  "preset": "go",
+  "summary": "Axiom will compile this Go application and run it as a container on port 9000.",
+  "blocking": [],
+  "language": {
+    "value": "Go",
+    "provenance": "detected",
+    "confidence": 1
+  },
+  "runtimeVersion": {
+    "value": "go 1.23",
+    "provenance": "detected",
+    "confidence": 1
+  },
+  "framework": {
+    "value": ""
+  },
+  "packageManager": {
+    "value": "go",
+    "provenance": "detected",
+    "confidence": 1
+  },
+  "buildCommand": {
+    "value": "go build -trimpath -o ./axiom-app ./cmd/server",
+    "provenance": "default"
+  },
+  "startCommand": {
+    "value": "./axiom-app",
+    "provenance": "default"
+  },
+  "port": {
+    "value": 9000,
+    "provenance": "detected",
+    "confidence": 0.6
+  },
+  "containerStrategy": {
+    "value": "source",
+    "provenance": "default"
+  },
+  "healthCheck": {
+    "value": {
+      "type": "http",
+      "path": "/"
+    },
+    "provenance": "default"
+  },
+  "services": [],
+  "configuration": [],
+  "confidence": 0.6
+}

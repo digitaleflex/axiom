@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "version": 0,
+  "analyzerVersion": "evidence/1.0.0",
+  "source": {
+    "repositoryId": "repo_1",
+    "ref": "main",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "root": ""
+  },
+  "status": "unsupported",
+  "summary": "Axiom can't deploy this repository in V0.1: FastAPI is not supported in V0.1.",
+  "unsupported": {
+    "code": "UNSUPPORTED_FRAMEWORK",
+    "message": "FastAPI is not supported in V0.1",
+    "detected": "FastAPI",
+    "alternatives": [
+      "Add a Dockerfile to the repository to deploy any stack as a container",
+      "Add an axiom.yaml manifest with explicit build and start commands",
+      "Supported in V0.1: Next.js, Vite, Node.js, Go, Dockerfile, Docker Compose"
+    ]
+  },
+  "blocking": [],
+  "language": {
+    "value": "Python",
+    "provenance": "detected",
+    "confidence": 0.95
+  },
+  "runtimeVersion": {
+    "value": ""
+  },
+  "framework": {
+    "value": "FastAPI",
+    "provenance": "detected",
+    "confidence": 0.8
+  },
+  "packageManager": {
+    "value": ""
+  },
+  "buildCommand": {
+    "value": ""
+  },
+  "startCommand": {
+    "value": ""
+  },
+  "port": {
+    "value": 0
+  },
+  "containerStrategy": {
+    "value": ""
+  },
+  "healthCheck": {
+    "value": {
+      "type": ""
+    }
+  },
+  "services": [],
+  "configuration": [],
+  "confidence": 0.8
+}

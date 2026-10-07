@@ -16,6 +16,13 @@ import yaml
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
+def _registry():
+    from referencing import Registry, Resource
+    with open(os.path.join(ROOT, "schemas", "artifact.schema.json")) as f:
+        schema = json.load(f)
+    return Registry().with_resource(schema["$id"], Resource.from_contents(schema))
+
+
 def load_schema(name):
     with open(os.path.join(ROOT, "schemas", name)) as f:
         schema = json.load(f)
@@ -105,6 +112,15 @@ def main():
     results.append(check(artifact, os.path.join(ROOT, "schemas", "artifact.yaml"), True))
     for p in sorted(glob.glob(os.path.join(ROOT, "schemas", "examples", "artifacts", "*.yaml"))):
         results.append(check(artifact, p, os.path.basename(p).startswith("valid-")))
+
+    # Profiles produced by the Go profile builder must satisfy the contract.
+    profile_validator = jsonschema.Draft202012Validator({"$ref": "https://axiom.dev/schemas/artifact.schema.json#/$defs/ApplicationProfile"},
+                                                        registry=_registry())
+    for p in sorted(glob.glob(os.path.join(ROOT, "services", "engine", "internal", "profile", "testdata", "golden", "*.json"))):
+        with open(p) as f:
+            data = json.load(f)
+        errors = list(profile_validator.iter_errors(data))
+        results.append(report(not errors, f"{os.path.relpath(p, ROOT)} matches ApplicationProfile contract {errors[0].message if errors else ''}"))
 
     config = load_schema("expert-config.schema.json")
     for p in sorted(glob.glob(os.path.join(ROOT, "schemas", "examples", "expert-config", "*.yaml"))):

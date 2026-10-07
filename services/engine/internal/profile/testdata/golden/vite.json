@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "version": 0,
+  "analyzerVersion": "evidence/1.0.0",
+  "source": {
+    "repositoryId": "repo_1",
+    "ref": "main",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "root": ""
+  },
+  "status": "ready",
+  "preset": "vite",
+  "summary": "Axiom will build this Vite app with npm and serve the static output on port 8080.",
+  "blocking": [],
+  "language": {
+    "value": "JavaScript",
+    "provenance": "detected",
+    "confidence": 0.8
+  },
+  "runtimeVersion": {
+    "value": ""
+  },
+  "framework": {
+    "value": "Vite",
+    "provenance": "detected",
+    "confidence": 0.98
+  },
+  "packageManager": {
+    "value": "npm",
+    "provenance": "detected",
+    "confidence": 0.9
+  },
+  "buildCommand": {
+    "value": "npm run build",
+    "provenance": "detected",
+    "confidence": 0.95
+  },
+  "startCommand": {
+    "value": ""
+  },
+  "port": {
+    "value": 8080,
+    "provenance": "default"
+  },
+  "containerStrategy": {
+    "value": "source",
+    "provenance": "default"
+  },
+  "healthCheck": {
+    "value": {
+      "type": "http",
+      "path": "/"
+    },
+    "provenance": "default"
+  },
+  "services": [],
+  "configuration": [],
+  "confidence": 0.8
+}

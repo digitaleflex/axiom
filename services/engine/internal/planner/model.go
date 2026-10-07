@@ -2,7 +2,8 @@ package planner
 
 import "github.com/digitaleflex/axiom/services/engine/internal/profile"
 
-type ApplicationProfile = profile.ApplicationProfile
+// ApplicationProfile is the canonical profile consumed by the planner (#95).
+type ApplicationProfile = profile.Profile
 
 type ServerProfile struct {
 	ID           string

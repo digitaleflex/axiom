@@ -23,13 +23,13 @@ func (e *Engine) Generate(profile ApplicationProfile, server ServerProfile, doma
 	id := "plan_" + id()
 	return Plan{
 		ID:                        id,
-		ApplicationProfileVersion: 1,
+		ApplicationProfileVersion: profile.Version,
 		ServerID:                  server.ID,
-		Strategy:                  "docker",
-		Build:                     BuildPlan{Strategy: "docker", PackageManager: profile.PackageManager, Command: profile.BuildCommand},
-		Runtime:                   RuntimePlan{Type: profile.Framework, StartCommand: profile.StartCommand, Port: profile.Port},
-		Network:                   NetworkPlan{Proxy: "traefik", Domain: domain, TLS: true, ExposedPort: profile.Port},
-		Health:                    HealthPlan{Type: "http", Path: "/", TimeoutSeconds: 30},
+		Strategy:                  profile.Preset,
+		Build:                     BuildPlan{Strategy: profile.ContainerStrategy.Value, PackageManager: profile.PackageManager.Value, Command: profile.BuildCommand.Value},
+		Runtime:                   RuntimePlan{Type: profile.Preset, StartCommand: profile.StartCommand.Value, Port: profile.Port.Value},
+		Network:                   NetworkPlan{Proxy: "traefik", Domain: domain, TLS: true, ExposedPort: profile.Port.Value},
+		Health:                    HealthPlan{Type: profile.HealthCheck.Value.Type, Path: profile.HealthCheck.Value.Path, TimeoutSeconds: 30},
 		Rollback:                  RollbackPlan{Strategy: "previous_release"},
 		Steps: []Step{
 			{Name: "BUILD", Order: 1},

@@ -40,6 +40,8 @@ const (
 	KindStartScript    = "start_script"
 	KindPort           = "port"
 	KindServices       = "services"
+	KindPublicService  = "public_service"
+	KindEntrypoint     = "entrypoints"
 	KindConfiguration  = "configuration"
 	KindWorkspace      = "workspace"
 	KindManifest       = "project_manifest"
@@ -47,7 +49,7 @@ const (
 
 // KindOrder is the canonical, deterministic finding order.
 var KindOrder = []string{KindLanguage, KindRuntimeVersion, KindFramework, KindPackageManager, KindContainer,
-	KindBuildScript, KindStartScript, KindPort, KindServices, KindConfiguration, KindWorkspace, KindManifest}
+	KindBuildScript, KindStartScript, KindEntrypoint, KindPort, KindServices, KindPublicService, KindConfiguration, KindWorkspace, KindManifest}
 
 // Evidence explains why a fact is believed.
 type Evidence struct {

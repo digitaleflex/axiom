@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "version": 0,
+  "analyzerVersion": "evidence/1.0.0",
+  "source": {
+    "repositoryId": "repo_1",
+    "ref": "main",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "root": ""
+  },
+  "status": "ready",
+  "preset": "dockerfile",
+  "summary": "Axiom will build the repository Dockerfile and run the image on port 8000.",
+  "blocking": [],
+  "language": {
+    "value": "Python",
+    "provenance": "detected",
+    "confidence": 0.95
+  },
+  "runtimeVersion": {
+    "value": ""
+  },
+  "framework": {
+    "value": "Django",
+    "provenance": "detected",
+    "confidence": 0.8
+  },
+  "packageManager": {
+    "value": ""
+  },
+  "buildCommand": {
+    "value": ""
+  },
+  "startCommand": {
+    "value": ""
+  },
+  "port": {
+    "value": 8000,
+    "provenance": "detected",
+    "confidence": 0.8
+  },
+  "containerStrategy": {
+    "value": "dockerfile",
+    "provenance": "detected",
+    "confidence": 0.95
+  },
+  "healthCheck": {
+    "value": {
+      "type": "http",
+      "path": "/"
+    },
+    "provenance": "default"
+  },
+  "services": [],
+  "configuration": [],
+  "confidence": 0.8
+}

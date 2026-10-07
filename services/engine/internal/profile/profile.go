@@ -1,92 +1,105 @@
+// Package profile defines the canonical, versioned Application Profile
+// (issue #95) consumed by the planner, the UI and persistence. Consumers
+// depend on this schema, never on analyzer internals.
 package profile
 
-import (
-	"fmt"
+// SchemaVersion is bumped on breaking changes to the serialized profile.
+const SchemaVersion = 1
 
-	"github.com/digitaleflex/axiom/services/engine/internal/analyzer"
+// Provenance of a value (highest precedence first).
+const (
+	ProvenanceOverride = "override"
+	ProvenanceManifest = "manifest"
+	ProvenanceDetected = "detected"
+	ProvenanceDefault  = "default"
 )
 
-type ApplicationProfile struct {
-	Version           int
-	Ref               string
-	Language          string
-	Framework         string
-	PackageManager    string
-	BuildCommand      string
-	StartCommand      string
-	Port              int
-	ContainerStrategy string
-	Services          []string
-	Configuration     []string
-	Confidence        float64
-	Evidence          []string
+// Status of a profile.
+const (
+	StatusReady       = "ready"        // deployable as-is
+	StatusNeedsReview = "needs_review" // blocking facts must be confirmed by the user
+	StatusUnsupported = "unsupported"  // cannot resolve to a V0.1 preset
+)
+
+// Field is one profile value with its provenance and confidence.
+type Field[T any] struct {
+	Value      T        `json:"value"`
+	Provenance string   `json:"provenance,omitempty"`
+	Confidence float64  `json:"confidence,omitempty"`
+	Candidates []string `json:"candidates,omitempty"`
+	// Replaced records the lower-precedence value that was overridden (L3 in UI).
+	Replaced *T `json:"replaced,omitempty"`
 }
 
-type Builder struct{}
+// Set reports whether the field has a value.
+func (f Field[T]) Set() bool { return f.Provenance != "" }
 
-func NewBuilder() *Builder { return &Builder{} }
-
-func (b *Builder) Build(result analyzer.Result) (ApplicationProfile, error) {
-	p := ApplicationProfile{Version: 1, Ref: result.Ref}
-	var confidence float64
-	var count int
-	for _, f := range result.Findings {
-		switch f.Kind {
-		case "language":
-			if p.Language == "" {
-				p.Language = f.Value
-			}
-		case "framework":
-			if p.Framework == "" {
-				p.Framework = f.Value
-			}
-		case "package_manager":
-			if p.PackageManager == "" {
-				p.PackageManager = f.Value
-			}
-		case "container":
-			if p.ContainerStrategy == "" {
-				p.ContainerStrategy = f.Value
-			}
-		}
-		p.Evidence = append(p.Evidence, f.Evidence...)
-		if f.Confidence > 0 {
-			confidence += f.Confidence
-			count++
-		}
-	}
-	switch p.PackageManager {
-	case "pnpm":
-		p.BuildCommand, p.StartCommand = "pnpm build", "pnpm start"
-	case "yarn":
-		p.BuildCommand, p.StartCommand = "yarn build", "yarn start"
-	case "npm":
-		p.BuildCommand, p.StartCommand = "npm run build", "npm start"
-	case "bun":
-		p.BuildCommand, p.StartCommand = "bun run build", "bun run start"
-	case "go":
-		p.BuildCommand, p.StartCommand = "go build ./...", "./app"
-	default:
-		if p.Language == "Go" {
-			p.BuildCommand, p.StartCommand = "go build ./...", "./app"
-		}
-	}
-	switch p.Framework {
-	case "Next.js", "Vite":
-		p.Port = 3000
-	default:
-		if p.Language == "Go" {
-			p.Port = 8080
-		}
-	}
-	if p.ContainerStrategy == "" {
-		p.ContainerStrategy = "docker"
-	}
-	if count > 0 {
-		p.Confidence = confidence / float64(count)
-	}
-	if p.Language == "" || p.BuildCommand == "" || p.StartCommand == "" || p.Port == 0 {
-		return ApplicationProfile{}, fmt.Errorf("insufficient evidence to build a deployable application profile")
-	}
-	return p, nil
+// HealthCheck describes how the runtime is verified before LIVE.
+type HealthCheck struct {
+	Type string `json:"type"` // http | tcp
+	Path string `json:"path,omitempty"`
 }
+
+// ConfigRequirement is a configuration variable name (never a value).
+type ConfigRequirement struct {
+	Name     string `json:"name"`
+	Required bool   `json:"required"`
+	Secret   bool   `json:"secret"`
+}
+
+// Issue is a blocking fact the user must resolve before planning.
+type Issue struct {
+	Field   string   `json:"field"`
+	Code    string   `json:"code"` // ambiguous | low_confidence | not_detected | invalid_override
+	Message string   `json:"message"`
+	Options []string `json:"options,omitempty"`
+}
+
+// Unsupported explains why no V0.1 preset applies.
+type Unsupported struct {
+	Code         string   `json:"code"`
+	Message      string   `json:"message"`
+	Detected     string   `json:"detected,omitempty"`
+	Alternatives []string `json:"alternatives"`
+}
+
+// Source correlates the profile to an exact repository commit.
+type Source struct {
+	RepositoryID string `json:"repositoryId"`
+	Ref          string `json:"ref"`
+	Commit       string `json:"commit"`
+	Root         string `json:"root"`
+}
+
+// Profile is the canonical Application Profile.
+type Profile struct {
+	SchemaVersion   int    `json:"schemaVersion"`
+	Version         int    `json:"version"` // revision per application, assigned on persistence
+	AnalysisID      string `json:"analysisId,omitempty"`
+	AnalyzerVersion string `json:"analyzerVersion"`
+	Source          Source `json:"source"`
+
+	Status      string       `json:"status"`
+	Preset      string       `json:"preset,omitempty"`
+	Summary     string       `json:"summary"`
+	Unsupported *Unsupported `json:"unsupported,omitempty"`
+	Blocking    []Issue      `json:"blocking"`
+
+	Language          Field[string]       `json:"language"`
+	RuntimeVersion    Field[string]       `json:"runtimeVersion"`
+	Framework         Field[string]       `json:"framework"`
+	PackageManager    Field[string]       `json:"packageManager"`
+	BuildCommand      Field[string]       `json:"buildCommand"`
+	StartCommand      Field[string]       `json:"startCommand"`
+	Port              Field[int]          `json:"port"`
+	ContainerStrategy Field[string]       `json:"containerStrategy"`
+	HealthCheck       Field[HealthCheck]  `json:"healthCheck"`
+	Services          []string            `json:"services"`
+	PublicService     string              `json:"publicService,omitempty"`
+	Configuration     []ConfigRequirement `json:"configuration"`
+
+	Confidence float64 `json:"confidence"`
+}
+
+// Deployable reports whether the planner may consume the profile.
+func (p Profile) Deployable() bool { return p.Status == StatusReady }

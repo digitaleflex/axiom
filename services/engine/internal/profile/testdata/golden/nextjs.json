@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "version": 0,
+  "analyzerVersion": "evidence/1.0.0",
+  "source": {
+    "repositoryId": "repo_1",
+    "ref": "main",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "root": ""
+  },
+  "status": "ready",
+  "preset": "nextjs",
+  "summary": "Axiom will build this Next.js app with pnpm and run it as a container on port 3000.",
+  "blocking": [],
+  "language": {
+    "value": "TypeScript",
+    "provenance": "detected",
+    "confidence": 0.97
+  },
+  "runtimeVersion": {
+    "value": "node 20",
+    "provenance": "detected",
+    "confidence": 1
+  },
+  "framework": {
+    "value": "Next.js",
+    "provenance": "detected",
+    "confidence": 0.98
+  },
+  "packageManager": {
+    "value": "pnpm",
+    "provenance": "detected",
+    "confidence": 1
+  },
+  "buildCommand": {
+    "value": "pnpm run build",
+    "provenance": "detected",
+    "confidence": 0.95
+  },
+  "startCommand": {
+    "value": "pnpm start",
+    "provenance": "detected",
+    "confidence": 0.95
+  },
+  "port": {
+    "value": 3000,
+    "provenance": "default"
+  },
+  "containerStrategy": {
+    "value": "source",
+    "provenance": "default"
+  },
+  "healthCheck": {
+    "value": {
+      "type": "http",
+      "path": "/"
+    },
+    "provenance": "default"
+  },
+  "services": [],
+  "configuration": [
+    {
+      "name": "DATABASE_URL",
+      "required": true,
+      "secret": true
+    },
+    {
+      "name": "NEXTAUTH_SECRET",
+      "required": true,
+      "secret": true
+    }
+  ],
+  "confidence": 0.95
+}

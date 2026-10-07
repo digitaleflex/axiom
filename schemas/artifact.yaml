@@ -5,30 +5,74 @@ type: ApplicationProfile
 schemaVersion: 1
 revision: 1
 producer: stack-detector
-consumers: [deployment-planner]
+consumers:
+- deployment-planner
 state: valid
-createdAt: "2026-10-07T14:01:12Z"
-fingerprint: "sha256:9a41c0de4b1f2e3d4c5b6a79881726354a5b6c7d8e9f00112233445566778899"
+createdAt: '2026-10-07T14:01:12Z'
+fingerprint: sha256:9a41c0de4b1f2e3d4c5b6a79881726354a5b6c7d8e9f00112233445566778899
 trace:
   applicationId: app_01J8ACME
   repositoryId: repo_123
   ref: main
   commit: 3f9c2a1
   requestId: req_8f2
-dependsOn: [art_01J8ANALYSIS1]
+dependsOn:
+- art_01J8ANALYSIS1
 payload:
+  schemaVersion: 1
   version: 3
-  language: TypeScript
-  framework: Next.js
-  packageManager: pnpm
-  buildCommand: pnpm build
-  startCommand: pnpm start
-  port: 3000
-  containerStrategy: docker
+  analyzerVersion: evidence/1.0.0
+  source:
+    repositoryId: repo_1
+    ref: main
+    commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    root: ''
+  status: ready
+  preset: nextjs
+  summary: Axiom will build this Next.js app with pnpm and run it as a container on
+    port 3000.
+  blocking: []
+  language:
+    value: TypeScript
+    provenance: detected
+    confidence: 0.97
+  runtimeVersion:
+    value: node 20
+    provenance: detected
+    confidence: 1
+  framework:
+    value: Next.js
+    provenance: detected
+    confidence: 0.98
+  packageManager:
+    value: pnpm
+    provenance: detected
+    confidence: 1
+  buildCommand:
+    value: pnpm run build
+    provenance: detected
+    confidence: 0.95
+  startCommand:
+    value: pnpm start
+    provenance: detected
+    confidence: 0.95
+  port:
+    value: 3000
+    provenance: default
+  containerStrategy:
+    value: source
+    provenance: default
+  healthCheck:
+    value:
+      type: http
+      path: /
+    provenance: default
   services: []
-  configuration: [DATABASE_URL]
-  confidence: 0.97
-  provenance:
-    framework: detected
-    packageManager: detected
-    port: default
+  configuration:
+  - name: DATABASE_URL
+    required: true
+    secret: true
+  - name: NEXTAUTH_SECRET
+    required: true
+    secret: true
+  confidence: 0.95

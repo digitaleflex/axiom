@@ -169,6 +169,7 @@ func TestComposeServices(t *testing.T) {
 		t.Fatalf("services = %v", svc.Values)
 	}
 	assertFinding(t, r, KindPort, StateDetected, "3000") // container port of the built service only
+	assertFinding(t, r, KindPublicService, StateDetected, "web")
 	assertFinding(t, r, KindFramework, StateDetected, "Express")
 }
 
@@ -210,6 +211,9 @@ func TestGoService(t *testing.T) {
 	assertFinding(t, r, KindLanguage, StateDetected, "Go")
 	assertFinding(t, r, KindPackageManager, StateDetected, "go")
 	assertFinding(t, r, KindFramework, StateDetected, "Chi")
+	if ep := get(t, r, KindEntrypoint); !reflect.DeepEqual(ep.Values, []string{"./cmd/server"}) {
+		t.Fatalf("entrypoints = %+v", ep)
+	}
 	assertFinding(t, r, KindPort, StateDetected, "9000")
 	if f := get(t, r, KindStartScript); f.State != StateNotApplicable {
 		t.Fatalf("Node scripts not applicable to Go: %+v", f)

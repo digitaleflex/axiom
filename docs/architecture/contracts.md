@@ -93,7 +93,7 @@ Rejected artifacts identify the failed quality gate; downstream stages accept on
 
 | Contract | Go code | Discrepancy |
 |---|---|---|
-| ApplicationProfile payload | `internal/profile.ApplicationProfile` | Go has `Evidence []string` (flat) and no `provenance`; contract requires per-field provenance (#95) |
-| RepositoryAnalysis finding | `internal/analyzer.Finding` | Go has no `state` (ambiguous/unsupported) nor structured evidence (#94) |
+| ApplicationProfile payload | `internal/profile.Profile` | aligned — golden profiles are validated against the schema by `tests/contracts/validate_schemas.py` (#95) |
+| RepositoryAnalysis finding | `internal/analyzer/evidence.Finding` | aligned: states, candidates, structured evidence (#94) |
 | DeploymentPlan payload | `internal/planner.Plan` | Go steps are `{Name, Order}` structs; no environment or fingerprint yet (#97) |
 | Health result | API §16 | aligned |

@@ -351,6 +351,8 @@ func (a *analysis) votePort(v string, w float64, e Evidence) {
 
 // --- Go -------------------------------------------------------------------------
 
+var goMainRe = regexp.MustCompile(`(?m)^package\s+main\s*$`)
+var goMainFuncRe = regexp.MustCompile(`(?m)^func\s+main\(\)`)
 var goVersionRe = regexp.MustCompile(`(?m)^go\s+(\d+\.\d+(?:\.\d+)?)\s*$`)
 var goListenRe = regexp.MustCompile(`(?:ListenAndServe(?:TLS)?\(|Addr:\s*|\.Run\(|\.Start\(|Listen\()\s*"(?:[\w.\-]*)?:(\d{2,5})"`)
 
@@ -373,13 +375,21 @@ func (a *analysis) detectGo() {
 			a.vote(KindFramework, fw.name, 0.8, Evidence{Source: SourceManifest, Path: p, Lines: l, Rule: "go.framework.require", Explanation: fw.mod + " is required"})
 		}
 	}
-	// Listening port from source (main packages only, bounded scan).
+	// Entrypoints (main packages) and listening port from source (bounded scan).
 	scanned := 0
 	a.walk(func(rel string, sf snapshot.File) {
 		if scanned >= 200 || !strings.HasSuffix(rel, ".go") || strings.HasSuffix(rel, "_test.go") || !sf.Retained {
 			return
 		}
 		scanned++
+		if goMainRe.Match(sf.Content) && goMainFuncRe.Match(sf.Content) {
+			dir := path.Dir(rel)
+			pkg := "."
+			if dir != "." {
+				pkg = "./" + dir
+			}
+			a.addMulti(KindEntrypoint, pkg, Evidence{Source: SourceSource, Path: a.abs(rel), Lines: lineOf(sf.Content, "func main("), Rule: "go.entrypoint.main", Explanation: "package main with func main()"})
+		}
 		if m := goListenRe.FindSubmatch(sf.Content); m != nil {
 			a.votePort(string(m[1]), 0.6, Evidence{Source: SourceSource, Path: a.abs(rel), Lines: lineOf(sf.Content, string(m[0])), Rule: "port.go_listen", Explanation: "server listens on :" + string(m[1])})
 		}
@@ -471,6 +481,9 @@ func (a *analysis) detectContainers() {
 		for _, n := range names {
 			svc := doc.Services[n]
 			a.addMulti(KindServices, n, Evidence{Source: SourceCompose, Path: p, Lines: lineOf(f.Content, n+":"), Rule: "compose.service", Explanation: "service " + n})
+			if svc.Build != nil && len(svc.Ports) > 0 {
+				a.vote(KindPublicService, n, 0.8, Evidence{Source: SourceCompose, Path: p, Lines: lineOf(f.Content, n+":"), Rule: "compose.public_service", Explanation: "service " + n + " is built from the repository and publishes ports"})
+			}
 			for _, port := range svc.Ports {
 				if container := composeContainerPort(fmt.Sprint(port)); container != "" && svc.Build != nil {
 					a.votePort(container, 0.7, Evidence{Source: SourceCompose, Path: p, Lines: lineOf(f.Content, fmt.Sprint(port)), Rule: "port.compose", Explanation: "service " + n + " publishes container port " + container})
@@ -532,6 +545,14 @@ func (a *analysis) notApplicable(kind string) string {
 	case KindBuildScript, KindStartScript:
 		if !hasNode {
 			return "scripts apply to Node.js projects"
+		}
+	case KindEntrypoint:
+		if !a.hasVote(KindLanguage, "Go") {
+			return "entrypoints are detected for Go modules"
+		}
+	case KindPublicService:
+		if !a.hasVote(KindContainer, "compose") {
+			return "applies to Compose projects"
 		}
 	case KindPackageManager:
 		if len(a.votes[KindLanguage]) > 0 && !hasNode && !a.hasVote(KindLanguage, "Go") {
