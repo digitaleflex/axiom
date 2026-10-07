@@ -16,6 +16,7 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/analyzer/snapshot"
 	"github.com/digitaleflex/axiom/services/engine/internal/application"
 	"github.com/digitaleflex/axiom/services/engine/internal/github/repos"
+	"github.com/digitaleflex/axiom/services/engine/internal/manifest"
 	"github.com/digitaleflex/axiom/services/engine/internal/profile"
 )
 
@@ -31,6 +32,12 @@ const (
 	ErrorRefNotFound  = "REF_NOT_FOUND"
 	ErrorSourceAccess = "SOURCE_ACCESS_FAILED"
 	ErrorSnapshot     = "SNAPSHOT_REJECTED"
+	// ErrorManifestInvalid is the fallback code for a rejected axiom.yaml;
+	// the specific manifest code (MANIFEST_PARSE_ERROR,
+	// MANIFEST_VERSION_UNSUPPORTED, MANIFEST_SCHEMA_INVALID,
+	// MANIFEST_SECRET_VALUE, MANIFEST_STRATEGY_UNSUPPORTED,
+	// MANIFEST_CONFLICT) is recorded when available.
+	ErrorManifestInvalid = "MANIFEST_SCHEMA_INVALID"
 )
 
 var (
@@ -128,8 +135,24 @@ func (s *Service) Analyze(ctx context.Context, userID string, app application.Re
 		return s.fail(ctx, rec, code, err)
 	}
 
+	// Optional axiom.yaml manifest (#124): validated hints and app.root,
+	// loaded from the snapshot. An invalid manifest blocks profile
+	// resolution — the analysis fails and no profile is stored.
+	manHints, manRoot, err := manifest.Load(snap, root)
+	if err != nil {
+		code := ErrorManifestInvalid
+		var merr *manifest.Error
+		if errors.As(err, &merr) && merr.Code != "" {
+			code = merr.Code
+		}
+		return s.fail(ctx, rec, code, err)
+	}
+	if manRoot != "" && root == "" {
+		root = manRoot // manifest app.root selects the monorepo application
+	}
+
 	result := evidence.Analyze(snap, evidence.Options{Root: root})
-	prof := profile.Build(result, profile.Source{RepositoryID: app.RepositoryID, Ref: ref, Commit: commit.SHA}, profile.Inputs{Overrides: hints})
+	prof := profile.Build(result, profile.Source{RepositoryID: app.RepositoryID, Ref: ref, Commit: commit.SHA}, profile.Inputs{Manifest: manHints, Overrides: hints})
 	prof.AnalysisID = rec.ID
 
 	now := time.Now().UTC()
