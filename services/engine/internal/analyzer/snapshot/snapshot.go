@@ -165,7 +165,7 @@ func FromTarGz(r io.Reader, lim Limits) (Snapshot, error) {
 		}
 		head = head[:n]
 		f.Binary = isBinary(head)
-		if !f.Binary && hdr.Size <= lim.MaxRetainedBytes && retainedTotal+hdr.Size <= lim.MaxRetainedTotal {
+		if !f.Binary && !secretLike(rel) && hdr.Size <= lim.MaxRetainedBytes && retainedTotal+hdr.Size <= lim.MaxRetainedTotal {
 			rest, err := io.ReadAll(io.LimitReader(tr, hdr.Size-int64(n)))
 			if err != nil {
 				if errors.Is(err, errArchiveLimit) {
@@ -211,6 +211,19 @@ func normalize(name string) (string, bool, error) {
 		return "", false, fmt.Errorf("%w: %q", ErrUnsafePath, name)
 	}
 	return clean, true, nil
+}
+
+// secretLike files may hold real credentials; their content is never retained.
+func secretLike(rel string) bool {
+	base := strings.ToLower(path.Base(rel))
+	switch base {
+	case ".env.example", ".env.sample", ".env.template", ".env.dist":
+		return false
+	case ".env", ".npmrc", ".netrc", ".pypirc":
+		return true
+	}
+	return strings.HasPrefix(base, ".env.") || strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key") ||
+		strings.HasPrefix(base, "id_rsa") || strings.HasPrefix(base, "id_ed25519")
 }
 
 func isBinary(head []byte) bool {

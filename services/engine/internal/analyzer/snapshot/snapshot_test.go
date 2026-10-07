@@ -166,3 +166,22 @@ func TestNormalizeRejectsControlAndInvalidNames(t *testing.T) {
 		t.Errorf("clean path = %q %v %v", p, ok, err)
 	}
 }
+
+func TestSecretFilesAreNeverRetained(t *testing.T) {
+	data := archive(t,
+		entry{name: "repo/.env", body: "DATABASE_URL=postgres://u:secret@db/app"},
+		entry{name: "repo/.env.production", body: "TOKEN=abc"},
+		entry{name: "repo/certs/server.key", body: "-----BEGIN PRIVATE KEY-----"},
+		entry{name: "repo/.env.example", body: "DATABASE_URL="},
+	)
+	s, err := FromTarGz(bytes.NewReader(data), DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range s.Files {
+		wantRetained := f.Path == ".env.example"
+		if f.Retained != wantRetained || (!wantRetained && f.Content != nil) {
+			t.Errorf("%s retained=%v", f.Path, f.Retained)
+		}
+	}
+}
