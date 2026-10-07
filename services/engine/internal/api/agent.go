@@ -14,7 +14,7 @@ import (
 // user authenticator (#76/#77). Transport hardening (mTLS, request signing) is
 // tracked by #88.
 func isAgentPublicPath(path string) bool {
-	return path == "/api/v1/agent/register" || path == "/api/v1/agent/rotate"
+	return path == "/api/v1/agent/register" || path == "/api/v1/agent/rotate" || path == "/api/v1/agent/heartbeat"
 }
 
 // authenticateWithAgents lets the agent-facing endpoints bypass the user

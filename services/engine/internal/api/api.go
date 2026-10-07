@@ -21,6 +21,8 @@ type Servers interface {
 	Rename(ctx context.Context, id, name string) (server.Record, error)
 	Remove(ctx context.Context, id string) error
 	ListFiltered(ctx context.Context, status string, limit, offset int) ([]server.Record, int, error)
+	// UpdateHealth persists agent heartbeat liveness (#78).
+	UpdateHealth(ctx context.Context, id string, health server.Health) error
 }
 
 // ServerStore is the read model for servers.
@@ -127,6 +129,7 @@ func New(d Deps) http.Handler {
 	// (#76/#77), not with the user authenticator.
 	r.HandleFunc("POST /api/v1/agent/register", a.wrap(a.agentRegister))
 	r.HandleFunc("POST /api/v1/agent/rotate", a.wrap(a.agentRotate))
+	r.HandleFunc("POST /api/v1/agent/heartbeat", a.wrap(a.agentHeartbeat))
 	r.HandleFunc("GET /api/v1/agent/status", a.wrap(a.agentStatus))
 
 	r.HandleFunc("POST /api/v1/applications/{applicationID}/deployments", a.wrap(a.createDeployment))

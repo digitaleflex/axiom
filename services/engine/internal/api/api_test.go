@@ -113,6 +113,22 @@ func (f *fakeServers) Remove(_ context.Context, id string) error {
 	}
 	return server.ErrNotFound
 }
+func (f *fakeServers) UpdateHealth(_ context.Context, id string, health server.Health) error {
+	for i, s := range f.items {
+		if s.ID == id {
+			f.items[i].Status = health.Status
+			f.items[i].AgentVersion = health.AgentVersion
+			f.items[i].Capabilities = health.Capabilities
+			f.items[i].CPUCount = health.CPUCount
+			f.items[i].MemoryMB = health.MemoryMB
+			f.items[i].DiskFreeMB = health.DiskFreeMB
+			f.items[i].LastSeenAt = health.LastSeenAt
+			return nil
+		}
+	}
+	return server.ErrNotFound
+}
+
 func (f *fakeServers) ListFiltered(_ context.Context, status string, limit, offset int) ([]server.Record, int, error) {
 	var items []server.Record
 	for _, s := range f.items {
