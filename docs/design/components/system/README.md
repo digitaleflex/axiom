@@ -96,7 +96,7 @@ Replaces a failed region only (rest of page keeps working). Content: "Couldn't l
 | Variant | When | Behavior |
 |---|---|---|
 | standard | reversible or low impact | title + impact + Cancel / Confirm |
-| destructive | irreversible or user-visible impact (remove domain, disconnect GitHub, remove server, revoke session, delete application) | Destructive button style (`--status-failed` fill, text "Remove …" — never "OK"); impact list; Cancel is default focus |
+| destructive | irreversible or user-visible impact (remove domain, disconnect GitHub, remove server, revoke session, delete application) | Destructive button style (`--status-failed` fill with `--on-status` text — never white, see accessibility A4; label "Remove …" — never "OK"); impact list; Cancel is default focus |
 | typed | Production impact or account-wide scope | destructive + type the exact target name to enable |
 | privileged | security-relevant operations (rotate credential, create API token, change security settings) | shows **scope** (what it affects) and **target** (exact resource, mono ID) + "This action is recorded in the audit log." |
 

@@ -125,7 +125,7 @@ Environment is not a status and must not reuse status colors. It is encoded by *
 
 - Label is always visible text ("Production"), never abbreviated in the context bar. In dense tables the abbreviations `PROD`/`STG`/`PREV` are allowed with full name in `title`/accessible name.
 - Height 24px, `--radius-sm`, `--text-sm`.
-- When the requested environment has no deployment, the chip shows the environment with a trailing "· not deployed" in `--text-tertiary`.
+- When the requested environment has no deployment, the chip shows the environment with a trailing "· not deployed" in `--text-secondary` (`--text-tertiary` fails contrast on surface-3, accessibility A1).
 
 ### 4.2 Environment menu
 

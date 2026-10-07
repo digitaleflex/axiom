@@ -52,7 +52,7 @@ The shell consumes only tokens from `docs/design/tokens/axiom.css`. The followin
 | Sidebar | `--surface-1` |
 | Active nav item / hover | `--surface-2` |
 | Drawers, menus, Production chip fill | `--surface-3` |
-| Active location indicator, focus ring, nav progress bar | `--axiom-accent`, `--axiom-accent-focus` |
+| Active location indicator, focus ring, nav progress bar | `--axiom-accent` (`--focus-ring-*` for focus) |
 | Status pills, banners, toasts | `--status-*` only |
 | Technical values (IDs, SHAs, timestamps) | mono family, `--text-sm` |
 
@@ -141,7 +141,7 @@ Client storage is per user, holds only identifiers and preferences (last environ
 - Icon-only buttons have `aria-label`; unread counts are part of the label.
 - Drawers/dialogs trap focus, close on Escape, restore focus to their trigger.
 - `prefers-reduced-motion`: disable drawer slide and nav progress animation (instant state change).
-- Visible focus: 2px ring using `--axiom-accent-focus` plus outline offset; never color shift alone.
+- Visible focus: `outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset);` (solid accent, ≥13:1). `--axiom-accent-focus` may only be an additional outer halo (accessibility §1.4 A2).
 
 ---
 

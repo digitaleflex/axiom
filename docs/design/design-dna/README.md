@@ -54,7 +54,7 @@ Axiom uses a dark technical foundation with restrained accent usage.
 | `--axiom-accent` | `#C5F441` | Primary Axiom accent, key actions, active emphasis |
 | `--axiom-accent-strong` | `#D5FF63` | Hover/emphasis |
 | `--axiom-accent-muted` | `rgba(197,244,65,.14)` | Accent surfaces |
-| `--axiom-accent-focus` | `rgba(197,244,65,.32)` | Focus ring |
+| `--axiom-accent-focus` | `rgba(197,244,65,.32)` | Focus halo (outer, decorative). The focus indicator itself is a solid `--axiom-accent` ring — see v1.0.1 amendment in `docs/design/accessibility/README.md` §1.4 |
 
 The accent must not be used as a substitute for semantic status colors.
 

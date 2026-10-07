@@ -55,4 +55,12 @@
   --shadow-sm: 0 1px 2px rgba(0,0,0,.22);
   --shadow-md: 0 8px 24px rgba(0,0,0,.28);
   --shadow-lg: 0 16px 48px rgba(0,0,0,.34);
+
+  /* v1.0.1 accessibility amendment — #140, see docs/design/accessibility/README.md §1.4 */
+  --border-control: #6B747D;          /* ≥3:1 boundary for interactive controls (A3) */
+  --focus-ring-color: var(--axiom-accent); /* solid focus indicator, ≥13:1 on all surfaces (A2) */
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --on-accent: var(--surface-0);      /* text on --axiom-accent fills */
+  --on-status: var(--surface-0);      /* text on --status-* fills, e.g. destructive buttons (A4) */
 }
