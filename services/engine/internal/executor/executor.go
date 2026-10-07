@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/build"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
+	"github.com/digitaleflex/axiom/services/engine/internal/planner"
 )
 
 // Error codes recorded on failure (docs/architecture/api-contract.md §18).
@@ -16,13 +19,33 @@ const (
 	ErrorHealthCheckFailed = "HEALTH_CHECK_FAILED"
 )
 
+// Step timeouts. VERIFY is computed from the plan health policy; the rest are
+// fixed outer bounds (builds enforce their own timeout inside).
+var (
+	BuildTimeout         = 20 * time.Minute
+	CreateRuntimeTimeout = 3 * time.Minute
+	NetworkTimeout       = 3 * time.Minute
+	StartTimeout         = 2 * time.Minute
+)
+
+// Attempts per step. Builds are not retried (expensive, usually deterministic
+// failures); runtime operations tolerate one transient failure; verification
+// polls through short executor-level retries while the agent owns the
+// probe loop (#85).
+var Attempts = map[string]int{
+	"BUILD": 1, "CREATE_RUNTIME": 2, "NETWORK": 2, "START": 2, "VERIFY": 3,
+}
+
 func New(deployments *deployment.Service, builder BuildRunner, agent RuntimeAgent) *PlanExecutor {
-	return &PlanExecutor{deployments: deployments, builder: builder, agent: agent}
+	return &PlanExecutor{
+		deployments: deployments, builder: builder, agent: agent,
+		Log: slog.Default(), Backoff: ExponentialBackoff, Timeouts: nil,
+	}
 }
 
 // Execute runs a plan for an existing PENDING deployment. Steps and state
-// transitions are persisted through the deployment service; LIVE is recorded
-// only after the VERIFY step succeeds.
+// transitions are persisted through the deployment service; a failed step
+// stops all downstream steps; LIVE is recorded only after VERIFY succeeds.
 func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error) {
 	if e.deployments == nil || e.builder == nil || e.agent == nil {
 		return Result{}, errors.New("deployment service, build runner and runtime agent are required")
@@ -31,6 +54,11 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 		return Result{}, errors.New("deploymentID, plan ID, server ID and source are required")
 	}
 	id := req.DeploymentID
+	corr := req.CorrelationID
+	if corr == "" {
+		corr = deployment.NewID("req")
+	}
+	log := e.log().With("deploymentId", id, "correlationId", corr)
 
 	for _, s := range []deployment.State{deployment.StateAnalyzing, deployment.StatePlanning, deployment.StateBuilding} {
 		if _, err := e.deployments.Transition(ctx, id, s); err != nil {
@@ -39,7 +67,7 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 	}
 
 	var built build.Result
-	if err := e.step(ctx, id, "BUILD", func() error {
+	if err := e.step(ctx, log, id, "BUILD", ErrorBuildFailed, e.timeout("BUILD", req.Plan), func(ctx context.Context, attempt int) error {
 		var err error
 		built, err = e.builder.Build(ctx, build.Input{
 			DeploymentID: id, ApplicationID: req.Plan.ApplicationID, AppSlug: req.AppSlug,
@@ -55,29 +83,38 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 	}
 	runtimeSteps := []struct {
 		name string
-		run  func() error
+		code string
+		run  func(ctx context.Context, op Operation) error
 	}{
-		{"CREATE_RUNTIME", func() error {
-			return e.agent.CreateRuntime(ctx, CreateRuntimeRequest{DeploymentID: id, ServerID: req.Plan.ServerID, ImageRef: built.ImageRef, Container: req.Container, Port: req.Plan.Runtime.Port})
+		{"CREATE_RUNTIME", ErrorRuntimeFailed, func(ctx context.Context, op Operation) error {
+			return e.agent.CreateRuntime(ctx, CreateRuntimeRequest{Operation: op,
+				ImageRef: built.ImageRef, Container: req.Container, Port: req.Plan.Runtime.Port})
 		}},
-		{"NETWORK", func() error {
-			return e.agent.ConfigureNetwork(ctx, NetworkRequest{DeploymentID: id, ServerID: req.Plan.ServerID, Container: req.Container, Proxy: req.Plan.Network.Proxy, Domain: req.Plan.Network.Domain, TLS: req.Plan.Network.TLS, Port: req.Plan.Network.ExposedPort})
+		{"NETWORK", ErrorRuntimeFailed, func(ctx context.Context, op Operation) error {
+			return e.agent.ConfigureNetwork(ctx, NetworkRequest{Operation: op,
+				Container: req.Container, Proxy: req.Plan.Network.Proxy, Domain: req.Plan.Network.Domain,
+				TLS: req.Plan.Network.TLS, Port: req.Plan.Network.ExposedPort})
 		}},
-		{"START", func() error {
-			return e.agent.StartRuntime(ctx, StartRequest{DeploymentID: id, ServerID: req.Plan.ServerID, Container: req.Container})
+		{"START", ErrorRuntimeFailed, func(ctx context.Context, op Operation) error {
+			return e.agent.StartRuntime(ctx, StartRequest{Operation: op, Container: req.Container})
 		}},
 	}
 	for _, s := range runtimeSteps {
-		if err := e.step(ctx, id, s.name, s.run); err != nil {
-			return e.fail(ctx, id, ErrorRuntimeFailed, err)
+		s := s
+		if err := e.step(ctx, log, id, s.name, s.code, e.timeout(s.name, req.Plan), func(ctx context.Context, attempt int) error {
+			return s.run(ctx, newOperation(corr, id, req.Plan.ServerID, s.name, attempt))
+		}); err != nil {
+			return e.fail(ctx, id, s.code, err)
 		}
 	}
 
 	if _, err := e.deployments.Transition(ctx, id, deployment.StateVerifying); err != nil {
 		return Result{}, err
 	}
-	if err := e.step(ctx, id, "VERIFY", func() error {
-		return e.agent.HealthCheck(ctx, HealthCheckRequest{DeploymentID: id, ServerID: req.Plan.ServerID, Domain: req.Plan.Network.Domain, Path: req.Plan.Health.Path, TimeoutSeconds: req.Plan.Health.TimeoutSeconds})
+	if err := e.step(ctx, log, id, "VERIFY", ErrorHealthCheckFailed, e.timeout("VERIFY", req.Plan), func(ctx context.Context, attempt int) error {
+		return e.agent.HealthCheck(ctx, HealthCheckRequest{
+			Operation: newOperation(corr, id, req.Plan.ServerID, "VERIFY", attempt),
+			Domain:    req.Plan.Network.Domain, Path: req.Plan.Health.Path, TimeoutSeconds: req.Plan.Health.TimeoutSeconds})
 	}); err != nil {
 		return e.fail(ctx, id, ErrorHealthCheckFailed, err)
 	}
@@ -97,16 +134,92 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 	return Result{Deployment: record, ImageRef: built.ImageRef, ArtifactID: built.ArtifactID, Artifact: built.Artifact}, nil
 }
 
-// step records RUNNING, runs fn, then records COMPLETED or FAILED.
-func (e *PlanExecutor) step(ctx context.Context, id, name string, fn func() error) error {
+// newOperation builds the envelope for one attempt of a step. The operation
+// ID is deterministic (deployment + step + attempt) so retried attempts are
+// idempotent at the agent.
+func newOperation(corr, deploymentID, serverID, step string, attempt int) Operation {
+	return Operation{
+		OperationID:   fmt.Sprintf("op_%s_%s_%d", deploymentID, step, attempt),
+		CorrelationID: corr,
+		DeploymentID:  deploymentID,
+		ServerID:      serverID,
+	}
+}
+
+// step records RUNNING, runs fn with per-attempt timeout and retries, then
+// records COMPLETED or FAILED (with exit and error codes for diagnostics).
+func (e *PlanExecutor) step(ctx context.Context, log *slog.Logger, id, name, code string, timeout time.Duration, fn func(ctx context.Context, attempt int) error) error {
 	if err := e.deployments.RecordStep(ctx, id, deployment.StepChange{Name: name, Status: deployment.StepRunning}); err != nil {
 		return fmt.Errorf("%s: record start: %w", name, err)
 	}
-	if err := fn(); err != nil {
-		_ = e.deployments.RecordStep(ctx, id, deployment.StepChange{Name: name, Status: deployment.StepFailed})
-		return fmt.Errorf("%s: %w", name, err)
+	attempts := Attempts[name]
+	if attempts < 1 {
+		attempts = 1
 	}
-	return e.deployments.RecordStep(ctx, id, deployment.StepChange{Name: name, Status: deployment.StepCompleted})
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		err = e.attempt(ctx, timeout, func(ctx context.Context) error { return fn(ctx, attempt) })
+		if err == nil {
+			return e.deployments.RecordStep(ctx, id, deployment.StepChange{Name: name, Status: deployment.StepCompleted})
+		}
+		if errors.Is(err, context.Canceled) || attempt == attempts || !retryable(err) {
+			break
+		}
+		log.Info("step attempt failed, retrying", "step", name, "attempt", attempt, "error", err.Error())
+		if e.Backoff != nil {
+			if wait := e.Backoff(attempt); wait > 0 {
+				timer := time.NewTimer(wait)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					err = ctx.Err()
+				case <-timer.C:
+				}
+				if ctx.Err() != nil {
+					err = ctx.Err()
+					break
+				}
+			}
+		}
+	}
+	change := deployment.StepChange{Name: name, Status: deployment.StepFailed, ErrorCode: code}
+	if exit := exitCodeOf(err); exit != nil {
+		change.ExitCode = exit
+	}
+	_ = e.deployments.RecordStep(ctx, id, change)
+	return fmt.Errorf("%s: %w", name, err)
+}
+
+// attempt runs fn with the step timeout.
+func (e *PlanExecutor) attempt(ctx context.Context, timeout time.Duration, fn func(context.Context) error) error {
+	if timeout <= 0 {
+		return fn(ctx)
+	}
+	stepCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return fn(stepCtx)
+}
+
+// retryable reports whether a step error deserves another attempt.
+// Cancellations and deterministic build failures (non-zero exit) are permanent.
+func retryable(err error) bool {
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	var be *build.Error
+	if errors.As(err, &be) {
+		return be.ExitCode == 0 && be.Code != build.CodeInterrupted
+	}
+	return true
+}
+
+func exitCodeOf(err error) *int {
+	var be *build.Error
+	if errors.As(err, &be) && be.ExitCode != 0 {
+		v := be.ExitCode
+		return &v
+	}
+	return nil
 }
 
 func (e *PlanExecutor) fail(ctx context.Context, id, code string, cause error) (Result, error) {
@@ -114,4 +227,49 @@ func (e *PlanExecutor) fail(ctx context.Context, id, code string, cause error) (
 		return Result{}, fmt.Errorf("%w; marking deployment failed: %v", cause, err)
 	}
 	return Result{}, cause
+}
+
+// timeout returns the outer bound for one attempt of a step. VERIFY is
+// derived from the plan health policy (retries × (timeout + interval) with a
+// 60s margin, minimum 2m); overrides in Timeouts win for tests and tuning.
+func (e *PlanExecutor) timeout(name string, plan planner.Plan) time.Duration {
+	if e.Timeouts != nil {
+		if d, ok := e.Timeouts[name]; ok {
+			return d
+		}
+	}
+	switch name {
+	case "BUILD":
+		return BuildTimeout
+	case "CREATE_RUNTIME":
+		return CreateRuntimeTimeout
+	case "NETWORK":
+		return NetworkTimeout
+	case "START":
+		return StartTimeout
+	case "VERIFY":
+		total := time.Duration(plan.Health.Retries)*time.Duration(plan.Health.TimeoutSeconds+plan.Health.IntervalSeconds)*time.Second + time.Minute
+		if total < 2*time.Minute {
+			total = 2 * time.Minute
+		}
+		return total
+	default:
+		return 0
+	}
+}
+
+func (e *PlanExecutor) log() *slog.Logger {
+	if e.Log != nil {
+		return e.Log
+	}
+	return slog.Default()
+}
+
+// ExponentialBackoff waits 2s, 4s, 8s… capped at 30s.
+func ExponentialBackoff(attempt int) time.Duration {
+	d := time.Duration(1<<uint(attempt)) * time.Second
+	if d > 30*time.Second {
+		d = 30 * time.Second
+	}
+	return d
 }

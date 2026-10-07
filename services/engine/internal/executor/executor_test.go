@@ -93,10 +93,17 @@ func setup(t *testing.T) (*deployment.Service, deployment.Record, planner.Plan) 
 	return svc, rec, plan
 }
 
+func run(t *testing.T, svc *deployment.Service, builder BuildRunner, agent RuntimeAgent, ctx context.Context, req Request) (Result, error) {
+	t.Helper()
+	ex := New(svc, builder, agent)
+	ex.Backoff = nil // no sleeping in tests
+	return ex.Execute(ctx, req)
+}
+
 func TestExecuteReachesLive(t *testing.T) {
 	svc, rec, plan := setup(t)
 	agent := &fakeAgent{}
-	res, err := New(svc, fakeBuilder{}, agent).Execute(context.Background(), Request{
+	res, err := run(t, svc, fakeBuilder{}, agent, context.Background(), Request{
 		DeploymentID: rec.ID, AppSlug: "acme-web", Container: "axiom-app-1", Source: fakeSource{}, Plan: plan,
 	})
 	if err != nil {
@@ -121,7 +128,7 @@ func TestExecuteReachesLive(t *testing.T) {
 
 func TestHealthFailureNeverReachesLive(t *testing.T) {
 	svc, rec, plan := setup(t)
-	_, err := New(svc, fakeBuilder{}, &failAgent{step: "VERIFY"}).Execute(context.Background(), Request{
+	_, err := run(t, svc, fakeBuilder{}, &failAgent{}, context.Background(), Request{
 		DeploymentID: rec.ID, Container: "c", Source: fakeSource{}, Plan: plan,
 	})
 	if err == nil {
@@ -133,7 +140,7 @@ func TestHealthFailureNeverReachesLive(t *testing.T) {
 	}
 }
 
-type failAgent struct{ step string }
+type failAgent struct{}
 
 func (a *failAgent) CreateRuntime(context.Context, CreateRuntimeRequest) error { return nil }
 func (a *failAgent) ConfigureNetwork(context.Context, NetworkRequest) error    { return nil }
@@ -145,7 +152,7 @@ func (a *failAgent) HealthCheck(context.Context, HealthCheckRequest) error {
 func TestBuildFailureRecordsCode(t *testing.T) {
 	svc, rec, plan := setup(t)
 	agent := &fakeAgent{}
-	_, err := New(svc, fakeBuilder{err: &build.Error{Code: build.CodeBuildFailed, Message: "exit 1", ExitCode: 1}}, agent).Execute(context.Background(), Request{
+	_, err := run(t, svc, fakeBuilder{err: &build.Error{Code: build.CodeBuildFailed, Message: "exit 1", ExitCode: 1}}, agent, context.Background(), Request{
 		DeploymentID: rec.ID, Container: "c", Source: fakeSource{}, Plan: plan,
 	})
 	if err == nil {

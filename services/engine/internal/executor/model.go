@@ -2,6 +2,8 @@ package executor
 
 import (
 	"context"
+	"log/slog"
+	"time"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/build"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
@@ -15,33 +17,39 @@ type RuntimeAgent interface {
 	HealthCheck(ctx context.Context, req HealthCheckRequest) error
 }
 
+// Operation carries the envelope every bounded agent operation needs:
+// an explicit type (the method), a deterministic idempotency key and the
+// correlation ID tracing the operation to its API request (#75, #80).
+type Operation struct {
+	OperationID   string
+	CorrelationID string
+	DeploymentID  string
+	ServerID      string
+}
+
 type CreateRuntimeRequest struct {
-	DeploymentID string
-	ServerID     string
-	ImageRef     string
-	Container    string
-	Port         int
+	Operation
+	ImageRef  string
+	Container string
+	Port      int
 }
 
 type NetworkRequest struct {
-	DeploymentID string
-	ServerID     string
-	Container    string
-	Proxy        string
-	Domain       string
-	TLS          bool
-	Port         int
+	Operation
+	Container string
+	Proxy     string
+	Domain    string
+	TLS       bool
+	Port      int
 }
 
 type StartRequest struct {
-	DeploymentID string
-	ServerID     string
-	Container    string
+	Operation
+	Container string
 }
 
 type HealthCheckRequest struct {
-	DeploymentID   string
-	ServerID       string
+	Operation
 	Domain         string
 	Path           string
 	TimeoutSeconds int
@@ -56,14 +64,22 @@ type PlanExecutor struct {
 	deployments *deployment.Service
 	builder     BuildRunner
 	agent       RuntimeAgent
+	// Log receives step retry and execution events (structured, no secrets).
+	Log *slog.Logger
+	// Backoff waits between attempts; nil disables waiting.
+	Backoff func(attempt int) time.Duration
+	// Timeouts overrides per-step attempt timeouts ("" disables).
+	Timeouts map[string]time.Duration
 }
 
 type Request struct {
 	DeploymentID string
-	AppSlug      string
-	Container    string
-	Source       build.Source
-	Plan         planner.Plan
+	// CorrelationID traces the execution to its API request; generated when empty.
+	CorrelationID string
+	AppSlug       string
+	Container     string
+	Source        build.Source
+	Plan          planner.Plan
 }
 
 type Result struct {
