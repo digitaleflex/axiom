@@ -1,0 +1,4 @@
+# expected: MANIFEST_SCHEMA_INVALID (services requires strategy compose)
+version: 1
+strategy: node
+services: {file: docker-compose.yml}

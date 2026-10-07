@@ -1,0 +1,3 @@
+version: 1
+app: {name: shop-web, root: apps/web}
+strategy: vite

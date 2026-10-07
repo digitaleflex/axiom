@@ -1,128 +1,99 @@
 # Axiom Core Contracts
 
-## Purpose
+> Issues #30 (expert contract), #31 (manifest), #32 (artifacts). Decision: [ADR-0007](../adr/0007-explicit-expert-contracts.md).
 
-This document defines the first stable contracts between Axiom components. Contracts are the boundary that allows the platform, domain projects, expert agents, orchestrator, and runtime to evolve independently.
+## 1. Purpose & Principles
 
-## Contract principles
+Contracts are the boundary that lets the Engine, experts, Runtime Agent and Console evolve independently.
 
 1. Explicit inputs and outputs.
-2. Versioned contracts.
-3. Traceable artifacts and tasks.
+2. Versioned contracts; breaking changes need a new version and migration path.
+3. Traceable artifacts (repository, commit, deployment, execution).
 4. Least authority between components.
-5. Deterministic validation where possible.
+5. Deterministic validation before execution; invalid inputs fail with actionable diagnostics.
 6. Human approval for sensitive or irreversible operations.
 7. No implicit transfer of business authority to technical components.
+8. Secrets are references or managed values, never embedded in declarative contracts.
 
-## Core entities
+## 2. Contract Inventory
 
-### Project Manifest
+| Contract | Schema | Spec | Status |
+|---|---|---|---|
+| Deployment expert contract | [`schemas/expert-contract.schema.json`](../../schemas/expert-contract.schema.json) | §3 | v1, normative |
+| Reference expert contracts | [`schemas/experts/*.yaml`](../../schemas/experts/) | §3.3 | v1, normative |
+| Project manifest (`axiom.yaml`) | [`schemas/axiom.schema.json`](../../schemas/axiom.schema.json) | [`axiom-yaml.md`](axiom-yaml.md) | v1, normative |
+| Deployment artifact envelope | [`schemas/artifact.schema.json`](../../schemas/artifact.schema.json) | [`artifacts.md`](artifacts.md) | v1, normative |
+| REST API & SSE | — | [`api-contract.md`](api-contract.md) | v1 |
+| Agent ↔ Engine protocol | — | `agent-protocol.md` (#75) | planned |
+| Legacy framework agent contract | `schemas/agent-contract.schema.json`, `schemas/agent.yaml`, `schemas/task.yaml` | §6 | **legacy** — development/governance framework only, not for deployment experts |
 
-The `axiom.yaml` manifest declares project identity, domain metadata, runtime requirements, enabled platform capabilities, environments, endpoints, observability, backups, and compatibility.
+Validation: `python3 tests/contracts/validate_schemas.py` (schemas + valid/invalid examples).
 
-The manifest describes requirements; it must not embed platform implementation logic or secrets.
+## 3. Deployment Expert Contract
 
-### Agent Contract
+### 3.1 Bounded experts
 
-An expert agent declares:
+Experts are **bounded specialists**, each producing one kind of artifact. They are not a generic software-factory pipeline: they cannot write application code, cannot call each other, and cannot change deployment state. The Deployment Engine invokes them through an internal interface independent of any model provider (V0.1 experts are deterministic code).
 
-- identity and role;
-- contract version;
-- capabilities;
-- accepted inputs;
-- produced outputs and artifacts;
-- permitted tools;
-- forbidden responsibilities;
-- dependencies;
-- quality gates;
-- escalation rules;
-- runtime limits.
+### 3.2 Fields
 
-### Task Contract
+| Field | Meaning |
+|---|---|
+| `expert` | identity: id, name, purpose, implementation owner path |
+| `capabilities` | what the expert can produce/decide |
+| `inputs` | artifact types consumed; only `valid` artifacts |
+| `outputs` | artifact types produced + schema reference |
+| `tools` | closed list of permitted tools (e.g. `repository.read`, `agent.dispatch`) |
+| `forbidden_responsibilities` | explicit authority limits |
+| `dependencies` | upstream experts whose artifacts are required |
+| `quality_gates` | validation rules with failure action `reject` / `revise` / `escalate` |
+| `escalation` | conditions routed to `engine`, `user`, `human-approval` or `security-expert` |
+| `implementation` | `code` or `model-assisted`, determinism, `provider_coupling: none` |
 
-A task represents an executable unit of expert work.
+### 3.3 Reference experts
 
-Required concepts:
+| Expert | Produces | Consumes | Key forbidden responsibility | Owner |
+|---|---|---|---|---|
+| Repository Analyzer | RepositoryAnalysis | RepositorySnapshot, ProjectManifest | execute repository code | `internal/analyzer` |
+| Stack Detector | ApplicationProfile | RepositoryAnalysis, ProjectManifest | present defaults as detected | `internal/profile` |
+| Deployment Planner | DeploymentPlan | ApplicationProfile, ServerProfile, DeploymentConfiguration | execute steps; embed secrets | `internal/planner` |
+| Build Expert | BuildArtifact | DeploymentPlan | deploy; leak secrets into images | `internal/build` |
+| Runtime Expert | DeploymentResult, HealthResult | DeploymentPlan, BuildArtifact | shell commands; LIVE without health | `internal/executor` |
+| Infrastructure Expert | ServerProfile | ServerProfile, DeploymentPlan | privileged host operations | `internal/server` |
+| Security Expert | SecurityReport | DeploymentPlan, ProjectManifest | approve own exceptions | planned (#129) |
 
-- task identity;
-- project identity;
-- assigned role;
-- objective;
-- input artifact references;
-- expected artifacts;
-- dependencies;
-- quality gates;
-- approval requirements;
-- lifecycle status.
+Dependency chain: Analyzer → Stack Detector → Planner → Build → Runtime; Infrastructure feeds Planner; Security evaluates plans before execution.
 
-### Artifact Contract
+## 4. Authority Boundaries
 
-Artifacts are versioned outputs exchanged between experts and platform components.
+| Actor | Owns | Never owns |
+|---|---|---|
+| Deployment Engine | state machine, sequencing, artifact validation, authorization, policy, approvals | business semantics |
+| Experts | their artifact within declared tools | state transitions, other experts' artifacts, security exceptions |
+| Runtime Agent | bounded execution of typed operations on one server | orchestration, business logic, shell |
+| User / Domain project | repository, `axiom.yaml`, configuration values, approvals | platform constraints |
 
-Required concepts:
-
-- artifact identity;
-- artifact type;
-- schema/version;
-- producer;
-- consumers;
-- project/task references;
-- dependencies;
-- validation state;
-- traceability metadata.
-
-## Handoff lifecycle
+## 5. Handoff Lifecycle
 
 ```text
-CREATED
-   ↓
-VALIDATING
-   ↓
-ACCEPTED ───────→ CONSUMED
-   │
-   └→ REVISION_REQUIRED
-             ↓
-          RESUBMITTED
+draft ──validate──► valid ──consumed by downstream stage
+  │                  │
+  └──► rejected      └──► superseded (newer revision/inputs)
+          │
+          └── resubmitted as new revision (draft)
 ```
 
-Rejected artifacts must identify the failed validation or quality gate and may be returned to the producing expert.
+Rejected artifacts identify the failed quality gate; downstream stages accept only `valid` artifacts (artifacts.md §5).
 
-## Authority boundaries
+## 6. Legacy Framework Contracts
 
-### Business Expert
+`schemas/agent-contract.schema.json`, `schemas/agent.yaml` and `schemas/task.yaml` describe the generic development/governance framework (roles such as architect, backend). They remain for `services/orchestrator` and the coding-agent workflow, but are superseded for deployment by §3 ([ADR-0010](../adr/0010-deployment-engine-supersedes-orchestrator.md)).
 
-Owns business requirements, domain rules, workflows, and product semantics.
+## 7. Code Alignment Notes
 
-Does not own infrastructure implementation, security exceptions, or runtime operations.
-
-### Technical Experts
-
-Own technical decisions within their declared responsibility and constraints.
-
-They must preserve business requirements received through validated artifacts.
-
-### Orchestrator
-
-Owns coordination, task routing, dependency management, context propagation, artifact exchange, lifecycle state, and escalation.
-
-It does not become the business authority or silently override technical governance.
-
-### Runtime Agent
-
-Owns bounded execution on an infrastructure node: deployment/runtime operations, health, logs, and authorized commands.
-
-It does not own orchestration or business logic.
-
-## Versioning
-
-Every normative contract must have an explicit version. Breaking changes require a new contract version and documented migration path.
-
-## Validation
-
-Contract validation should happen before execution whenever practical. Invalid manifests, tasks, agent declarations, or artifacts must fail deterministically and produce actionable diagnostics.
-
-## Security
-
-Secrets are references or managed values, never embedded in declarative project or agent contracts. Permissions are granted separately from capability declarations.
-
-Sensitive operations must be explicitly authorized, auditable, and subject to the applicable quality or human-approval gate.
+| Contract | Go code | Discrepancy |
+|---|---|---|
+| ApplicationProfile payload | `internal/profile.ApplicationProfile` | Go has `Evidence []string` (flat) and no `provenance`; contract requires per-field provenance (#95) |
+| RepositoryAnalysis finding | `internal/analyzer.Finding` | Go has no `state` (ambiguous/unsupported) nor structured evidence (#94) |
+| DeploymentPlan payload | `internal/planner.Plan` | Go steps are `{Name, Order}` structs; no environment or fingerprint yet (#97) |
+| Health result | API §16 | aligned |

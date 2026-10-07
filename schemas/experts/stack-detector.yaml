@@ -1,0 +1,24 @@
+contract_version: "1"
+expert:
+  id: stack-detector
+  name: Stack Detector
+  purpose: Turn analysis findings and manifest into a canonical Application Profile resolved to a V0.1 preset.
+  owner: services/engine/internal/profile
+capabilities: [profile.build, preset.resolve]
+inputs:
+  - {artifact: RepositoryAnalysis, required: true, state: valid}
+  - {artifact: ProjectManifest, required: false, state: valid}
+outputs:
+  - {artifact: ApplicationProfile, schema: schemas/artifact.schema.json#ApplicationProfile}
+tools: [preset.resolve]
+forbidden_responsibilities:
+  - present defaults as detected values
+  - mark unsupported stacks deployable
+  - infer unsafe commands
+dependencies: [repository-analyzer]
+quality_gates:
+  - {id: provenance, rule: "every profile value carries provenance (override, manifest, detected, default)", on_failure: reject}
+  - {id: preset-known, rule: "profile resolves to a known V0.1 preset or is marked unsupported with reason", on_failure: reject}
+escalation:
+  - {when: "ambiguous or low-confidence required fact", to: user}
+implementation: {kind: code, deterministic: true, provider_coupling: none}

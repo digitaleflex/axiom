@@ -1,0 +1,17 @@
+id: art_01J8PLAN1
+type: DeploymentPlan
+schemaVersion: 1
+producer: deployment-planner
+state: valid
+createdAt: "2026-10-07T14:02:00Z"
+fingerprint: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+trace: {applicationId: app_01J8ACME, repositoryId: repo_123, ref: main, commit: 3f9c2a1, planId: plan_123}
+dependsOn: [art_01J8PROFILE3]
+payload:
+  applicationProfileVersion: 3
+  serverId: srv_123
+  environment: production
+  strategy: nextjs
+  steps: [BUILD, CREATE_RUNTIME, NETWORK, START, VERIFY]
+  healthCheck: {type: http, path: /}
+  rollback: {strategy: keep-previous-until-verified}

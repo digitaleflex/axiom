@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://axiom.dev/schemas/expert-contract.schema.json",
+  "title": "Axiom Deployment Expert Contract",
+  "description": "Machine-readable contract of a bounded deployment expert (issue #30). See docs/architecture/contracts.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "expert", "capabilities", "inputs", "outputs", "tools", "forbidden_responsibilities", "dependencies", "quality_gates", "escalation", "implementation"],
+  "properties": {
+    "contract_version": {"const": "1"},
+    "expert": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "purpose", "owner"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+        "name": {"type": "string", "minLength": 1},
+        "purpose": {"type": "string", "minLength": 1},
+        "owner": {"type": "string", "description": "Repository location of the implementation"}
+      }
+    },
+    "capabilities": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_.]*$"}
+    },
+    "inputs": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["artifact", "required"],
+        "properties": {
+          "artifact": {"$ref": "#/$defs/artifactType"},
+          "required": {"type": "boolean"},
+          "state": {"enum": ["valid"], "description": "Only valid artifacts may be consumed"}
+        }
+      }
+    },
+    "outputs": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["artifact", "schema"],
+        "properties": {
+          "artifact": {"$ref": "#/$defs/artifactType"},
+          "schema": {"type": "string"}
+        }
+      }
+    },
+    "tools": {
+      "type": "array", "uniqueItems": true,
+      "items": {"enum": ["repository.read", "github.api.read", "profile.read", "preset.resolve", "server.read", "plan.validate", "build.workspace", "image.build", "agent.dispatch", "secret.reference", "policy.evaluate"]}
+    },
+    "forbidden_responsibilities": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+    "dependencies": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"}},
+    "quality_gates": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "rule", "on_failure"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+          "rule": {"type": "string"},
+          "on_failure": {"enum": ["reject", "revise", "escalate"]}
+        }
+      }
+    },
+    "escalation": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["when", "to"],
+        "properties": {
+          "when": {"type": "string"},
+          "to": {"enum": ["engine", "user", "human-approval", "security-expert"]}
+        }
+      }
+    },
+    "implementation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "deterministic"],
+      "properties": {
+        "kind": {"enum": ["code", "model-assisted"]},
+        "deterministic": {"type": "boolean"},
+        "provider_coupling": {"const": "none", "description": "Experts are invoked via an Engine interface, never coupled to a model provider"}
+      }
+    }
+  },
+  "$defs": {
+    "artifactType": {"enum": ["RepositorySnapshot", "RepositoryAnalysis", "ApplicationProfile", "ProjectManifest", "ServerProfile", "DeploymentConfiguration", "DeploymentPlan", "BuildArtifact", "DeploymentResult", "HealthResult", "SecurityReport"]}
+  }
+}

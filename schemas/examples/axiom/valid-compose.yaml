@@ -1,0 +1,7 @@
+version: 1
+strategy: compose
+services:
+  file: docker-compose.yml
+  include: [web, worker, redis]
+  public: web
+port: 3000

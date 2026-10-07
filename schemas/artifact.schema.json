@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://axiom.dev/schemas/artifact.schema.json",
+  "title": "Axiom Deployment Artifact Envelope",
+  "description": "Versioned artifact exchanged between Deployment Engine stages (issue #32). Spec: docs/architecture/artifacts.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "type", "schemaVersion", "producer", "state", "createdAt", "trace", "dependsOn", "payload"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^art_[A-Za-z0-9]+$"},
+    "type": {"enum": ["RepositorySnapshot", "RepositoryAnalysis", "ApplicationProfile", "ProjectManifest", "ServerProfile", "DeploymentConfiguration", "DeploymentPlan", "BuildArtifact", "DeploymentResult", "HealthResult", "SecurityReport"]},
+    "schemaVersion": {"type": "integer", "minimum": 1},
+    "revision": {"type": "integer", "minimum": 1, "description": "Increments when a rejected artifact is resubmitted"},
+    "producer": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "Expert id (schemas/experts) or 'engine' / 'user'"},
+    "consumers": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+    "state": {"enum": ["draft", "valid", "rejected", "superseded"]},
+    "rejection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["gate", "reason"],
+      "properties": {"gate": {"type": "string"}, "reason": {"type": "string"}}
+    },
+    "supersededBy": {"type": "string", "pattern": "^art_[A-Za-z0-9]+$"},
+    "createdAt": {"type": "string", "format": "date-time"},
+    "fingerprint": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "trace": {
+      "type": "object", "additionalProperties": false,
+      "required": ["applicationId", "repositoryId", "commit"],
+      "properties": {
+        "applicationId": {"type": "string"},
+        "repositoryId": {"type": "string"},
+        "ref": {"type": "string"},
+        "commit": {"type": "string", "pattern": "^[a-f0-9]{7,40}$"},
+        "deploymentId": {"type": "string"},
+        "planId": {"type": "string"},
+        "executionId": {"type": "string"},
+        "requestId": {"type": "string"}
+      }
+    },
+    "dependsOn": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^art_[A-Za-z0-9]+$"}},
+    "payload": {"type": "object"}
+  },
+  "allOf": [
+    {"if": {"properties": {"state": {"const": "rejected"}}}, "then": {"required": ["rejection"]}},
+    {"if": {"properties": {"state": {"const": "superseded"}}}, "then": {"required": ["supersededBy"]}},
+    {"if": {"properties": {"type": {"const": "RepositoryAnalysis"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/RepositoryAnalysis"}}}},
+    {"if": {"properties": {"type": {"const": "ApplicationProfile"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/ApplicationProfile"}}}},
+    {"if": {"properties": {"type": {"const": "DeploymentPlan"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/DeploymentPlan"}}}},
+    {"if": {"properties": {"type": {"const": "BuildArtifact"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/BuildArtifact"}}}},
+    {"if": {"properties": {"type": {"const": "HealthResult"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/HealthResult"}}}},
+    {"if": {"properties": {"type": {"const": "DeploymentResult"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/DeploymentResult"}}}},
+    {"if": {"properties": {"type": {"const": "SecurityReport"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/SecurityReport"}}}}
+  ],
+  "$defs": {
+    "RepositoryAnalysis": {
+      "type": "object", "required": ["analyzerVersion", "findings"],
+      "properties": {
+        "analyzerVersion": {"type": "string"},
+        "findings": {"type": "array", "items": {
+          "type": "object", "required": ["kind", "state", "evidence"],
+          "properties": {
+            "kind": {"type": "string"},
+            "value": {"type": "string"},
+            "state": {"enum": ["detected", "ambiguous", "not_detected", "unsupported", "not_applicable"]},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "candidates": {"type": "array", "items": {"type": "string"}},
+            "evidence": {"type": "array", "items": {
+              "type": "object", "required": ["source", "path", "effect"],
+              "properties": {
+                "source": {"enum": ["manifest", "lockfile", "dockerfile", "compose", "framework_config", "script", "source", "axiom_yaml"]},
+                "path": {"type": "string"},
+                "lines": {"type": "string", "pattern": "^[0-9]+(-[0-9]+)?$"},
+                "effect": {"enum": ["supports", "conflicts"]},
+                "rule": {"type": "string"}
+              }}}
+          }}},
+        "warnings": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "ApplicationProfile": {
+      "type": "object", "required": ["version", "language", "containerStrategy", "port", "confidence"],
+      "properties": {
+        "version": {"type": "integer", "minimum": 1},
+        "language": {"type": "string"},
+        "framework": {"type": "string"},
+        "packageManager": {"type": "string"},
+        "buildCommand": {"type": "string"},
+        "startCommand": {"type": "string"},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "containerStrategy": {"enum": ["docker", "dockerfile", "compose"]},
+        "services": {"type": "array", "items": {"type": "string"}},
+        "configuration": {"type": "array", "items": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$"}},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "provenance": {"type": "object", "additionalProperties": {"enum": ["override", "manifest", "detected", "default"]}}
+      }
+    },
+    "DeploymentPlan": {
+      "type": "object", "required": ["applicationProfileVersion", "serverId", "steps", "healthCheck"],
+      "properties": {
+        "applicationProfileVersion": {"type": "integer"},
+        "serverId": {"type": "string"},
+        "environment": {"enum": ["production", "staging", "preview"]},
+        "strategy": {"type": "string"},
+        "steps": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["BUILD", "CREATE_RUNTIME", "NETWORK", "START", "VERIFY"]}},
+        "healthCheck": {"type": "object", "required": ["type"], "properties": {"type": {"enum": ["http", "tcp"]}, "path": {"type": "string"}}},
+        "rollback": {"type": "object", "properties": {"strategy": {"type": "string"}}}
+      }
+    },
+    "BuildArtifact": {
+      "type": "object", "required": ["image", "digest"],
+      "properties": {
+        "image": {"type": "string"},
+        "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "durationMs": {"type": "integer", "minimum": 0}
+      }
+    },
+    "HealthResult": {
+      "type": "object", "required": ["status", "checkedAt"],
+      "properties": {
+        "status": {"enum": ["HEALTHY", "UNHEALTHY", "UNKNOWN"]},
+        "checkedAt": {"type": "string", "format": "date-time"},
+        "http": {"type": "object", "properties": {"statusCode": {"type": "integer"}, "latencyMs": {"type": "integer"}}},
+        "runtime": {"type": "object", "properties": {"status": {"type": "string"}}}
+      }
+    },
+    "DeploymentResult": {
+      "type": "object", "required": ["status"],
+      "properties": {
+        "status": {"enum": ["LIVE", "FAILED"]},
+        "url": {"type": "string"},
+        "failedStep": {"enum": ["BUILD", "CREATE_RUNTIME", "NETWORK", "START", "VERIFY"]},
+        "errorCode": {"type": "string"}
+      }
+    },
+    "SecurityReport": {
+      "type": "object", "required": ["decision", "findings"],
+      "properties": {
+        "decision": {"enum": ["allow", "deny"]},
+        "findings": {"type": "array", "items": {"type": "object", "required": ["rule", "severity"], "properties": {"rule": {"type": "string"}, "severity": {"enum": ["info", "low", "medium", "high", "critical"]}, "message": {"type": "string"}}}}
+      }
+    }
+  }
+}

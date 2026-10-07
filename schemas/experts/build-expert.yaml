@@ -1,0 +1,23 @@
+contract_version: "1"
+expert:
+  id: build-expert
+  name: Build Expert
+  purpose: Build an application image from an exact commit in an isolated workspace.
+  owner: services/engine/internal/build
+capabilities: [build.image, build.metadata]
+inputs:
+  - {artifact: DeploymentPlan, required: true, state: valid}
+outputs:
+  - {artifact: BuildArtifact, schema: schemas/artifact.schema.json#BuildArtifact}
+tools: [build.workspace, image.build, secret.reference]
+forbidden_responsibilities:
+  - deploy or start runtimes
+  - write secrets into image layers or logs
+  - build from an unresolved ref
+dependencies: [deployment-planner]
+quality_gates:
+  - {id: commit-pinned, rule: "build source is the plan commit SHA", on_failure: reject}
+  - {id: image-referenced, rule: "output includes image reference and digest", on_failure: reject}
+escalation:
+  - {when: "build command fails", to: engine}
+implementation: {kind: code, deterministic: true, provider_coupling: none}

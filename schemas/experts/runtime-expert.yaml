@@ -1,0 +1,25 @@
+contract_version: "1"
+expert:
+  id: runtime-expert
+  name: Runtime Expert
+  purpose: Translate plan runtime steps into bounded Runtime Agent operations and verify health.
+  owner: services/engine/internal/executor
+capabilities: [runtime.create, runtime.start, runtime.verify]
+inputs:
+  - {artifact: DeploymentPlan, required: true, state: valid}
+  - {artifact: BuildArtifact, required: true, state: valid}
+outputs:
+  - {artifact: DeploymentResult, schema: schemas/artifact.schema.json#DeploymentResult}
+  - {artifact: HealthResult, schema: schemas/artifact.schema.json#HealthResult}
+tools: [agent.dispatch, secret.reference]
+forbidden_responsibilities:
+  - send shell commands to the Runtime Agent
+  - mark a deployment LIVE without a passing health result
+  - change deployment state directly
+dependencies: [build-expert]
+quality_gates:
+  - {id: typed-operations, rule: "every dispatched operation has an explicit operation type", on_failure: reject}
+  - {id: health-gates-live, rule: "LIVE requires HealthResult status HEALTHY", on_failure: reject}
+escalation:
+  - {when: "health verification fails", to: engine}
+implementation: {kind: code, deterministic: true, provider_coupling: none}

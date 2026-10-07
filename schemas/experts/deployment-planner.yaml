@@ -1,0 +1,26 @@
+contract_version: "1"
+expert:
+  id: deployment-planner
+  name: Deployment Planner
+  purpose: Produce a deterministic, reviewable Deployment Plan from profile, server and configuration.
+  owner: services/engine/internal/planner
+capabilities: [plan.generate, plan.fingerprint]
+inputs:
+  - {artifact: ApplicationProfile, required: true, state: valid}
+  - {artifact: ServerProfile, required: true, state: valid}
+  - {artifact: DeploymentConfiguration, required: true, state: valid}
+outputs:
+  - {artifact: DeploymentPlan, schema: schemas/artifact.schema.json#DeploymentPlan}
+tools: [profile.read, server.read, plan.validate]
+forbidden_responsibilities:
+  - execute any step
+  - select a server that is not eligible
+  - embed secret values in the plan
+dependencies: [stack-detector]
+quality_gates:
+  - {id: deterministic, rule: "identical inputs produce an identical fingerprint", on_failure: reject}
+  - {id: steps-canonical, rule: "steps are a subset of BUILD, CREATE_RUNTIME, NETWORK, START, VERIFY in canonical order without duplicates", on_failure: reject}
+  - {id: capabilities-satisfied, rule: "server capabilities satisfy every step", on_failure: reject}
+escalation:
+  - {when: "no eligible server", to: user}
+implementation: {kind: code, deterministic: true, provider_coupling: none}

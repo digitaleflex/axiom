@@ -1,0 +1,3 @@
+version: 1
+strategy: nextjs
+port: 3000

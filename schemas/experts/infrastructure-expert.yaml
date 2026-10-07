@@ -1,0 +1,23 @@
+contract_version: "1"
+expert:
+  id: infrastructure-expert
+  name: Infrastructure Expert
+  purpose: Assess server eligibility and configure routing, domains and TLS through the Runtime Agent.
+  owner: services/engine/internal/server
+capabilities: [server.eligibility, network.configure]
+inputs:
+  - {artifact: ServerProfile, required: true, state: valid}
+  - {artifact: DeploymentPlan, required: false, state: valid}
+outputs:
+  - {artifact: ServerProfile, schema: schemas/artifact.schema.json#ServerProfile}
+tools: [server.read, agent.dispatch]
+forbidden_responsibilities:
+  - expose host shell or privileged host operations
+  - manage resources not created by Axiom
+  - weaken TLS or network isolation
+dependencies: []
+quality_gates:
+  - {id: eligibility-reasons, rule: "every non-eligible server lists all failing requirements", on_failure: reject}
+escalation:
+  - {when: "server offline or degraded", to: user}
+implementation: {kind: code, deterministic: true, provider_coupling: none}

@@ -1,12 +1,34 @@
-version: "0.1"
-artifact:
-  id: example-artifact
-  type: architecture-specification
-  version: 1
-  producer: architect
-  consumers: []
-  project_id: example-project
-  task_id: example-task
-  dependencies: []
-  validation:
-    status: pending
+# Example deployment artifact envelope (ApplicationProfile).
+# Schema: schemas/artifact.schema.json — Spec: docs/architecture/artifacts.md
+id: art_01J8PROFILE3
+type: ApplicationProfile
+schemaVersion: 1
+revision: 1
+producer: stack-detector
+consumers: [deployment-planner]
+state: valid
+createdAt: "2026-10-07T14:01:12Z"
+fingerprint: "sha256:9a41c0de4b1f2e3d4c5b6a79881726354a5b6c7d8e9f00112233445566778899"
+trace:
+  applicationId: app_01J8ACME
+  repositoryId: repo_123
+  ref: main
+  commit: 3f9c2a1
+  requestId: req_8f2
+dependsOn: [art_01J8ANALYSIS1]
+payload:
+  version: 3
+  language: TypeScript
+  framework: Next.js
+  packageManager: pnpm
+  buildCommand: pnpm build
+  startCommand: pnpm start
+  port: 3000
+  containerStrategy: docker
+  services: []
+  configuration: [DATABASE_URL]
+  confidence: 0.97
+  provenance:
+    framework: detected
+    packageManager: detected
+    port: default

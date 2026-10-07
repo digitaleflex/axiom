@@ -1,0 +1,10 @@
+# expected invalid: rejected artifacts must carry rejection.gate and rejection.reason
+id: art_01J8PLAN2
+type: DeploymentPlan
+schemaVersion: 1
+producer: deployment-planner
+state: rejected
+createdAt: "2026-10-07T14:02:00Z"
+trace: {applicationId: app_01J8ACME, repositoryId: repo_123, commit: 3f9c2a1}
+dependsOn: []
+payload: {applicationProfileVersion: 3, serverId: srv_123, steps: [BUILD], healthCheck: {type: http}}

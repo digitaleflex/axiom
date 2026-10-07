@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://axiom.dev/schemas/axiom.schema.json",
+  "title": "Axiom Project Manifest (axiom.yaml)",
+  "description": "Optional deployment manifest, version 1 (issue #31). Spec: docs/architecture/axiom-yaml.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version"],
+  "properties": {
+    "version": {"const": 1, "description": "Manifest version. 1 is supported by Axiom 0.1.x."},
+    "app": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"},
+        "root": {"type": "string", "description": "Application directory relative to repository root (monorepos)", "pattern": "^(?!/)(?!.*\\.\\.)[^\\0]*$"}
+      }
+    },
+    "strategy": {"enum": ["nextjs", "vite", "node", "go", "dockerfile", "compose"], "description": "Preset hint (#96). Must be supported by Axiom 0.1.x."},
+    "runtime": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "language": {"enum": ["javascript", "typescript", "go"]},
+        "version": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+){0,2}$"},
+        "packageManager": {"enum": ["npm", "pnpm", "yarn", "bun", "go"]}
+      }
+    },
+    "build": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "command": {"$ref": "#/$defs/command"},
+        "dockerfile": {"$ref": "#/$defs/relativePath"},
+        "context": {"$ref": "#/$defs/relativePath"}
+      }
+    },
+    "start": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"command": {"$ref": "#/$defs/command"}}
+    },
+    "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "env": {
+      "type": "array", "uniqueItems": true,
+      "description": "Configuration requirements. Names only — values are never allowed in the manifest.",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$"},
+          "required": {"type": "boolean", "default": true},
+          "secret": {"type": "boolean", "default": true},
+          "description": {"type": "string", "maxLength": 200}
+        }
+      }
+    },
+    "services": {
+      "type": "object", "additionalProperties": false,
+      "description": "Compose strategy only.",
+      "properties": {
+        "file": {"$ref": "#/$defs/relativePath"},
+        "include": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$"}},
+        "public": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$", "description": "Service exposed through routing"}
+      }
+    },
+    "domains": {
+      "type": "array", "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"}
+    },
+    "health": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {"enum": ["http", "tcp"]},
+        "path": {"type": "string", "pattern": "^/"},
+        "expectedStatus": {"type": "integer", "minimum": 100, "maximum": 599},
+        "timeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 300},
+        "retries": {"type": "integer", "minimum": 0, "maximum": 20}
+      }
+    },
+    "constraints": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "architecture": {"enum": ["linux/amd64", "linux/arm64"]},
+        "minMemoryMB": {"type": "integer", "minimum": 64},
+        "minDiskGB": {"type": "integer", "minimum": 1}
+      }
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"health": {"properties": {"type": {"const": "http"}}, "required": ["type"]}}, "required": ["health"]},
+     "then": {"properties": {"health": {"required": ["type", "path"]}}}},
+    {"if": {"required": ["services"]}, "then": {"properties": {"strategy": {"const": "compose"}}, "required": ["strategy"]}},
+    {"if": {"properties": {"strategy": {"const": "dockerfile"}}, "required": ["strategy"]},
+     "then": {"not": {"anyOf": [{"required": ["runtime"]}, {"properties": {"build": {"required": ["command"]}}, "required": ["build"]}]}}}
+  ],
+  "$defs": {
+    "relativePath": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$)).+$"},
+    "command": {"type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\n\\r`]*$"}
+  }
+}

@@ -1,0 +1,23 @@
+name: Contracts
+
+on:
+  pull_request:
+    paths: ["schemas/**", "tests/contracts/**"]
+  push:
+    branches: [main]
+    paths: ["schemas/**", "tests/contracts/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate contract schemas and examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml jsonschema
+      - run: python3 tests/contracts/validate_schemas.py

@@ -1,0 +1,3 @@
+# expected: MANIFEST_SCHEMA_INVALID (http health requires path)
+version: 1
+health: {type: http}

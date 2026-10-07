@@ -1,0 +1,3 @@
+# expected: MANIFEST_SCHEMA_INVALID (additional property "replicas")
+version: 1
+replicas: 3

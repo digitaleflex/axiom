@@ -1,0 +1,24 @@
+contract_version: "1"
+expert:
+  id: security-expert
+  name: Security Expert
+  purpose: Evaluate plans and operations against security policy and produce a security report.
+  owner: services/engine (policy, planned #129)
+capabilities: [policy.evaluate, secrets.audit]
+inputs:
+  - {artifact: DeploymentPlan, required: true, state: valid}
+  - {artifact: ProjectManifest, required: false, state: valid}
+outputs:
+  - {artifact: SecurityReport, schema: schemas/artifact.schema.json#SecurityReport}
+tools: [policy.evaluate]
+forbidden_responsibilities:
+  - approve its own policy exceptions
+  - read secret values
+  - modify plans
+dependencies: [deployment-planner]
+quality_gates:
+  - {id: no-secret-leak, rule: "plan and manifest contain no secret values", on_failure: reject}
+  - {id: policy-pass, rule: "policy decision is allow or deny with reason", on_failure: escalate}
+escalation:
+  - {when: "policy exception requested", to: human-approval}
+implementation: {kind: code, deterministic: true, provider_coupling: none}

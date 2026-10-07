@@ -1,0 +1,4 @@
+# expected: MANIFEST_SCHEMA_INVALID (path escapes repository)
+version: 1
+strategy: dockerfile
+build: {dockerfile: ../../etc/Dockerfile}

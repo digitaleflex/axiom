@@ -1,0 +1,26 @@
+contract_version: "1"
+expert:
+  id: repository-analyzer
+  name: Repository Analyzer
+  purpose: Inspect a read-only repository snapshot and record findings with evidence and confidence.
+  owner: services/engine/internal/analyzer
+capabilities: [analysis.findings, analysis.evidence]
+inputs:
+  - {artifact: RepositorySnapshot, required: true, state: valid}
+  - {artifact: ProjectManifest, required: false, state: valid}
+outputs:
+  - {artifact: RepositoryAnalysis, schema: schemas/artifact.schema.json#RepositoryAnalysis}
+tools: [repository.read]
+forbidden_responsibilities:
+  - execute repository code or scripts
+  - choose deployment strategy or server
+  - modify repository content
+  - read secret values
+dependencies: []
+quality_gates:
+  - {id: evidence-required, rule: "every finding has at least one evidence record", on_failure: reject}
+  - {id: confidence-bounded, rule: "confidence is within [0,1]", on_failure: reject}
+  - {id: conflicts-explicit, rule: "conflicting evidence produces an ambiguous finding, never a silent choice", on_failure: revise}
+escalation:
+  - {when: "snapshot unreadable or ref missing", to: engine}
+implementation: {kind: code, deterministic: true, provider_coupling: none}
