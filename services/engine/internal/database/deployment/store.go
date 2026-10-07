@@ -29,7 +29,7 @@ func New(db *sql.DB) *Store {
 }
 
 const recordColumns = `id, COALESCE(number, 0), application_id, server_id, environment, COALESCE(plan_id, ''), status,
-	COALESCE(url, ''), COALESCE(error_code, ''), COALESCE(created_by, ''), created_at, updated_at, started_at, completed_at`
+	COALESCE(url, ''), COALESCE(error_code, ''), COALESCE(created_by, ''), COALESCE(correlation_id, ''), created_at, updated_at, started_at, completed_at`
 
 type scanner interface{ Scan(...any) error }
 
@@ -37,7 +37,7 @@ func scanRecord(s scanner) (domain.Record, error) {
 	var r domain.Record
 	var started, completed sql.NullTime
 	err := s.Scan(&r.ID, &r.Number, &r.ApplicationID, &r.ServerID, &r.Environment, &r.PlanID, &r.Status,
-		&r.URL, &r.ErrorCode, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt, &started, &completed)
+		&r.URL, &r.ErrorCode, &r.CreatedBy, &r.CorrelationID, &r.CreatedAt, &r.UpdatedAt, &started, &completed)
 	if err != nil {
 		return domain.Record{}, err
 	}
@@ -139,10 +139,10 @@ func (s *Store) create(ctx context.Context, in domain.CreateInput) (rec domain.R
 		createdBy = in.CreatedBy
 	}
 	row := tx.QueryRowContext(ctx, `INSERT INTO deployments
-			(id, application_id, server_id, environment, plan_id, status, number, created_by, created_at, updated_at)
+			(id, application_id, server_id, environment, plan_id, status, number, created_by, correlation_id, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, 'PENDING',
-			(SELECT COALESCE(MAX(number), 0) + 1 FROM deployments WHERE application_id = $2), $6, $7, $7)
-		RETURNING `+recordColumns, id, in.ApplicationID, serverID, environment, in.PlanID, createdBy, now)
+			(SELECT COALESCE(MAX(number), 0) + 1 FROM deployments WHERE application_id = $2), $6, $8, $7, $7)
+		RETURNING `+recordColumns, id, in.ApplicationID, serverID, environment, in.PlanID, createdBy, now, in.CorrelationID)
 	rec, err = scanRecord(row)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -163,7 +163,7 @@ func (s *Store) create(ctx context.Context, in domain.CreateInput) (rec domain.R
 			return domain.Record{}, false, fmt.Errorf("insert step %s: %w", name, err)
 		}
 	}
-	if _, err := appendEvent(ctx, tx, rec.ID, domain.EventCreated, map[string]any{"status": domain.StatePending, "planId": in.PlanID, "number": rec.Number}, now); err != nil {
+	if _, err := appendEvent(ctx, tx, rec.ID, domain.EventCreated, domain.WithCorrelation(map[string]any{"status": domain.StatePending, "planId": in.PlanID, "number": rec.Number}, rec.CorrelationID), now); err != nil {
 		return domain.Record{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -285,7 +285,7 @@ func (s *Store) UpdateStatus(ctx context.Context, id string, change domain.Statu
 		id, rec.Status, rec.URL, rec.ErrorCode, rec.UpdatedAt, rec.StartedAt, rec.CompletedAt); err != nil {
 		return domain.Record{}, domain.Event{}, fmt.Errorf("update deployment: %w", err)
 	}
-	ev, err = appendEvent(ctx, tx, id, domain.EventStatusChanged, domain.StatusEventData(from, rec), now)
+	ev, err = appendEvent(ctx, tx, id, domain.EventStatusChanged, domain.WithCorrelation(domain.StatusEventData(from, rec), rec.CorrelationID), now)
 	if err != nil {
 		return domain.Record{}, domain.Event{}, err
 	}
@@ -306,8 +306,8 @@ func (s *Store) UpdateStep(ctx context.Context, id string, change domain.StepCha
 		}
 	}()
 	// Lock the parent deployment to serialize event sequencing.
-	var depID string
-	if err = tx.QueryRowContext(ctx, `SELECT id FROM deployments WHERE id = $1 FOR UPDATE`, id).Scan(&depID); err != nil {
+	var depID, correlationID string
+	if err = tx.QueryRowContext(ctx, `SELECT id, COALESCE(correlation_id, '') FROM deployments WHERE id = $1 FOR UPDATE`, id).Scan(&depID, &correlationID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.Step{}, domain.Event{}, domain.ErrNotFound
 		}
@@ -327,7 +327,7 @@ func (s *Store) UpdateStep(ctx context.Context, id string, change domain.StepCha
 		WHERE deployment_id = $1 AND name = $2`, id, st.Name, st.Status, st.StartedAt, st.CompletedAt, st.ExitCode, st.ErrorCode); err != nil {
 		return domain.Step{}, domain.Event{}, fmt.Errorf("update step: %w", err)
 	}
-	ev, err = appendEvent(ctx, tx, id, domain.StepEventType(st.Status), domain.StepEventData(st), now)
+	ev, err = appendEvent(ctx, tx, id, domain.StepEventType(st.Status), domain.WithCorrelation(domain.StepEventData(st), correlationID), now)
 	if err != nil {
 		return domain.Step{}, domain.Event{}, err
 	}

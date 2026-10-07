@@ -535,9 +535,12 @@ Returns persisted events ordered by `seq` (strictly increasing per deployment, s
 
 ```json
 { "items": [ { "id": "evt_…", "seq": 2, "type": "deployment.status.changed", "version": 1,
-               "deploymentId": "dep_123", "occurredAt": "…", "data": { "from": "PENDING", "status": "ANALYZING" } } ],
+               "deploymentId": "dep_123", "occurredAt": "…",
+               "data": { "from": "PENDING", "status": "ANALYZING", "correlationId": "req_…" } } ],
   "nextAfter": null }
 ```
+
+`data.correlationId` is the `X-Request-ID` of the request that created the deployment (#101), present on every event for end-to-end traceability.
 
 Event types: `deployment.created`, `deployment.status.changed`, `deployment.step.started`, `deployment.step.completed`, `deployment.step.failed`, `deployment.step.skipped`, `health.passed`, `health.failed`.
 

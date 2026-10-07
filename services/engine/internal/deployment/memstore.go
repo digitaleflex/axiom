@@ -72,14 +72,14 @@ func (m *MemoryStore) Create(_ context.Context, in CreateInput) (Record, bool, e
 	rec := Record{
 		ID: NewID("dep"), Number: m.numbers[in.ApplicationID], ApplicationID: in.ApplicationID,
 		ServerID: plan.ServerID, Environment: plan.Environment, PlanID: plan.ID, Status: StatePending,
-		CreatedBy: in.CreatedBy, CreatedAt: now, UpdatedAt: now,
+		CreatedBy: in.CreatedBy, CorrelationID: in.CorrelationID, CreatedAt: now, UpdatedAt: now,
 	}
 	m.records[rec.ID] = rec
 	m.planUse[plan.ID] = rec.ID
 	for i, name := range plan.Steps {
 		m.steps[rec.ID] = append(m.steps[rec.ID], Step{Name: name, Position: i + 1, Status: StepQueued})
 	}
-	m.appendLocked(rec.ID, EventCreated, map[string]any{"status": StatePending, "planId": plan.ID, "number": rec.Number})
+	m.appendLocked(rec.ID, EventCreated, withCorrelation(map[string]any{"status": StatePending, "planId": plan.ID, "number": rec.Number}, rec.CorrelationID))
 	if in.IdempotencyKey != "" {
 		m.idem[idemKey] = idemEntry{hash: in.RequestHash(), id: rec.ID}
 	}
@@ -142,7 +142,7 @@ func (m *MemoryStore) UpdateStatus(_ context.Context, id string, change StatusCh
 	now := m.now()
 	applyStatus(&rec, change, now)
 	m.records[id] = rec
-	ev := m.appendLocked(id, EventStatusChanged, statusEventData(from, rec))
+	ev := m.appendLocked(id, EventStatusChanged, withCorrelation(statusEventData(from, rec), rec.CorrelationID))
 	return rec, ev, nil
 }
 
@@ -156,7 +156,7 @@ func (m *MemoryStore) UpdateStep(_ context.Context, id string, change StepChange
 		if st.Name == change.Name {
 			applyStep(&st, change, m.now())
 			m.steps[id][i] = st
-			ev := m.appendLocked(id, stepEventType(change.Status), stepEventData(st))
+			ev := m.appendLocked(id, stepEventType(change.Status), withCorrelation(stepEventData(st), m.records[id].CorrelationID))
 			return st, ev, nil
 		}
 	}
@@ -187,7 +187,20 @@ func (m *MemoryStore) AppendEvent(_ context.Context, id, typ string, data map[st
 	if _, ok := m.records[id]; !ok {
 		return Event{}, ErrNotFound
 	}
-	return m.appendLocked(id, typ, data), nil
+	return m.appendLocked(id, typ, withCorrelation(data, m.records[id].CorrelationID)), nil
+}
+
+// withCorrelation adds the deployment correlation ID to an event payload so a
+// deployment is traceable from the API request through every event (#101).
+func withCorrelation(data map[string]any, correlationID string) map[string]any {
+	if correlationID == "" {
+		return data
+	}
+	if data == nil {
+		data = map[string]any{}
+	}
+	data["correlationId"] = correlationID
+	return data
 }
 
 func (m *MemoryStore) appendLocked(id, typ string, data map[string]any) Event {
@@ -286,6 +299,7 @@ func stepEventData(st Step) map[string]any {
 
 // Exported aliases used by other Store implementations.
 var (
+	WithCorrelation = withCorrelation
 	ApplyStatus     = applyStatus
 	ApplyStep       = applyStep
 	StatusEventData = statusEventData

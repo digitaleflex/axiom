@@ -10,16 +10,18 @@ import (
 
 // Record is the authoritative deployment state.
 type Record struct {
-	ID            string     `json:"id"`
-	Number        int        `json:"number"`
-	ApplicationID string     `json:"applicationId"`
-	ServerID      string     `json:"serverId"`
-	Environment   string     `json:"environment"`
-	PlanID        string     `json:"planId"`
-	Status        State      `json:"status"`
-	URL           string     `json:"url,omitempty"`
-	ErrorCode     string     `json:"errorCode,omitempty"`
-	CreatedBy     string     `json:"createdBy,omitempty"`
+	ID            string `json:"id"`
+	Number        int    `json:"number"`
+	ApplicationID string `json:"applicationId"`
+	ServerID      string `json:"serverId"`
+	Environment   string `json:"environment"`
+	PlanID        string `json:"planId"`
+	Status        State  `json:"status"`
+	URL           string `json:"url,omitempty"`
+	ErrorCode     string `json:"errorCode,omitempty"`
+	CreatedBy     string `json:"createdBy,omitempty"`
+	// CorrelationID traces the deployment to its originating API request.
+	CorrelationID string     `json:"correlationId,omitempty"`
 	CreatedAt     time.Time  `json:"createdAt"`
 	UpdatedAt     time.Time  `json:"updatedAt"`
 	StartedAt     *time.Time `json:"startedAt,omitempty"`
@@ -55,6 +57,9 @@ type CreateInput struct {
 	ApplicationID string
 	PlanID        string
 	CreatedBy     string
+	// CorrelationID is the API request that created the deployment
+	// (X-Request-ID); it is attached to every event for traceability.
+	CorrelationID string
 	// IdempotencyKey is optional; when set, retries return the same deployment.
 	IdempotencyKey string
 }

@@ -272,6 +272,7 @@ func (a *API) createDeployment(w http.ResponseWriter, r *http.Request) (err erro
 	}
 	rec, created, err := a.deployments.Create(r.Context(), deployment.CreateInput{
 		ApplicationID: app.ID, PlanID: in.PlanID, CreatedBy: principal(r.Context()).UserID, IdempotencyKey: key,
+		CorrelationID: requestID(r.Context()),
 	})
 	if err != nil {
 		return err
