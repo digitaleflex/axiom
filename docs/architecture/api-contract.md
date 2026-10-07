@@ -308,6 +308,18 @@ Every value is an object `{ "value", "provenance", "confidence", "candidates", "
 
 `status`: `ready` (deployable), `needs_review` (`blocking[]` items with `field`, `code` = `ambiguous` | `low_confidence` | `not_detected` | `invalid_override`, `options`), `unsupported` (`unsupported.code` e.g. `UNSUPPORTED_FRAMEWORK`, `MISSING_START_COMMAND`, `AMBIGUOUS_APPLICATION_ROOT`, with `alternatives`). Only `ready` profiles can be planned.
 
+### Application configuration values
+
+Application configuration values (#126) are stored encrypted at rest, scoped per application, and **write-only**: no endpoint returns a value.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/v1/applications/{applicationId}/configuration` | List values as metadata only: `{ "items": [ { "name": "DATABASE_URL", "secret": true, "isSet": true, "updatedAt": "…" } ] }` |
+| PUT | `/api/v1/applications/{applicationId}/configuration/{name}` | Set a value (`{ "value": "…", "secret": true }`), `204`; name must match `^[A-Z_][A-Z0-9_]*$` (`422` otherwise) |
+| DELETE | `/api/v1/applications/{applicationId}/configuration/{name}` | Remove a value, `204`; `404` when unset |
+
+Values are resolved into runtime `KEY=VALUE` environment entries at the build/runtime injection boundary, never in plans or API responses. Missing required names fail with the names listed, never the values.
+
 ### Replace overrides
 
 `PUT /api/v1/applications/{applicationId}/profile/overrides`

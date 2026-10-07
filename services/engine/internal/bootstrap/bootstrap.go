@@ -31,6 +31,7 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/logs"
 	"github.com/digitaleflex/axiom/services/engine/internal/observability/metrics"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner"
+	appconfig "github.com/digitaleflex/axiom/services/engine/internal/secrets"
 	"github.com/digitaleflex/axiom/services/engine/internal/security/secrets"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
 	"github.com/digitaleflex/axiom/services/engine/migrations"
@@ -152,6 +153,17 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 			return string(rec.Status), nil
 		})),
 	)
+	if cfg.SecretKey != "" {
+		key, err := secrets.ParseKey(cfg.SecretKey)
+		if err != nil {
+			return api.Deps{}, err
+		}
+		box, err := secrets.NewBox(key)
+		if err != nil {
+			return api.Deps{}, err
+		}
+		deps.AppConfig = &appconfig.Service{Store: &secrets.EncryptedStore{DB: db, Box: box}}
+	}
 	domainService := &domains.Service{Store: domains.PGStore{DB: db}, Resolver: stdResolver{}}
 	deps.Domains = domainService
 	deps.Logs = logs.NewPGStore(db, 0)

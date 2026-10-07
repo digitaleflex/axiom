@@ -47,6 +47,7 @@ type Deps struct {
 	Plans        Plans
 	Domains      Domains
 	Logs         LogStore
+	AppConfig    AppConfig
 	// Agents owns agent registration and credential lifecycle (#76/#77).
 	Agents *agentauth.Service
 	// ConsoleURL is where the GitHub callback redirects the browser.
@@ -69,6 +70,7 @@ type API struct {
 	plans        Plans
 	domains      Domains
 	logs         LogStore
+	appConfig    AppConfig
 	agents       *agentauth.Service
 	consoleURL   string
 	secure       bool
@@ -80,7 +82,7 @@ type API struct {
 func New(d Deps) http.Handler {
 	a := &API{
 		log: d.Log, auth: d.Auth, authSvc: d.Sessions, deployments: d.Deployments,
-		applications: d.Applications, servers: d.Servers, github: d.GitHub, repos: d.Repositories, analyses: d.Analyses, plans: d.Plans, domains: d.Domains, logs: d.Logs,
+		applications: d.Applications, servers: d.Servers, github: d.GitHub, repos: d.Repositories, analyses: d.Analyses, plans: d.Plans, domains: d.Domains, logs: d.Logs, appConfig: d.AppConfig,
 		agents:     d.Agents,
 		consoleURL: d.ConsoleURL, secure: d.SecureCookies, mux: http.NewServeMux(),
 	}
@@ -114,6 +116,10 @@ func New(d Deps) http.Handler {
 
 	r.HandleFunc("POST /api/v1/applications/{applicationID}/analysis", a.wrap(a.startAnalysis))
 	r.HandleFunc("GET /api/v1/applications/{applicationID}/analysis/{analysisID}", a.wrap(a.getAnalysis))
+	r.HandleFunc("GET /api/v1/applications/{applicationID}/configuration", a.wrap(a.listAppConfig))
+	r.HandleFunc("PUT /api/v1/applications/{applicationID}/configuration/{name}", a.wrap(a.setAppConfig))
+	r.HandleFunc("DELETE /api/v1/applications/{applicationID}/configuration/{name}", a.wrap(a.deleteAppConfig))
+
 	r.HandleFunc("GET /api/v1/applications/{applicationID}/profile", a.wrap(a.getProfile))
 	r.HandleFunc("PUT /api/v1/applications/{applicationID}/profile/overrides", a.wrap(a.putOverrides))
 
