@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AuthProvider } from './AuthContext'
 import { RequireAuth } from './RequireAuth'
 import { RETURN_PATH_STORAGE_KEY } from './session'
@@ -28,24 +28,34 @@ function renderGuarded(initialPath: string) {
 describe('RequireAuth', () => {
   afterEach(() => {
     window.sessionStorage.clear()
+    vi.restoreAllMocks()
   })
 
-  it('redirects unauthenticated users to /login', () => {
+  it('redirects unauthenticated users to /login', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })))
     renderGuarded('/dashboard')
+    expect(await screen.findByText('login page')).toBeInTheDocument()
     expect(screen.queryByText('secret dashboard')).not.toBeInTheDocument()
-    expect(screen.getByText('login page')).toBeInTheDocument()
   })
 
-  it('stores the canonical return path for post-login navigation', () => {
+  it('stores the canonical return path for post-login navigation', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })))
     renderGuarded('/dashboard')
+    await screen.findByText('login page')
     expect(window.sessionStorage.getItem(RETURN_PATH_STORAGE_KEY)).toBe('/dashboard')
   })
 
-  it('renders children when a token is present', async () => {
-    window.sessionStorage.setItem('axiom.token', 'test-token')
+  it('renders children when the session cookie is valid', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ id: 'usr_1', name: 'Jane', csrfToken: 'csrf_abc' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ),
+    )
     renderGuarded('/dashboard')
-    // No API is available in jsdom, so /auth/me fails as a network error and the
-    // interim token is trusted optimistically.
     expect(await screen.findByText('secret dashboard')).toBeInTheDocument()
   })
 })

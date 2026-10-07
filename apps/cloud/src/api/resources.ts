@@ -3,6 +3,7 @@ import { normalizePage, type PageQuery } from './pagination'
 import type {
   Analysis,
   Application,
+  AuthResult,
   Deployment,
   DeploymentEvent,
   DeploymentStep,
@@ -10,13 +11,13 @@ import type {
   GithubConnection,
   HealthResult,
   LogEntry,
+  Me,
   Paginated,
   Plan,
   Profile,
   Ref,
   Repository,
   Server,
-  User,
 } from './types'
 
 type ReadOptions = Pick<RequestOptions, 'signal'>
@@ -30,13 +31,47 @@ export function normalizeItems<T>(value: unknown): T[] {
 
 /* ------------------------------------------------------------------ Auth §2 */
 
-export function getMe(options: ReadOptions = {}): Promise<User> {
-  return api.get<User>('/auth/me', options)
+export function getMe(options: ReadOptions = {}): Promise<Me> {
+  return api.get<Me>('/auth/me', options)
 }
 
 /** Best-effort logout; the caller clears local state regardless. */
 export function logout(): Promise<void> {
   return apiFetch<void>('/auth/logout', { method: 'POST' })
+}
+
+/** Sign in with email and password; the Engine sets the session cookie. */
+export function login(email: string, password: string): Promise<AuthResult> {
+  return apiFetch<AuthResult>('/auth/login', { method: 'POST', body: { email, password }, skipCsrf: true })
+}
+
+/** Create an account and start a session. */
+export function register(email: string, password: string, name?: string): Promise<AuthResult> {
+  return apiFetch<AuthResult>('/auth/register', { method: 'POST', body: { email, password, name }, skipCsrf: true })
+}
+
+/** Active sessions for the current user (never returns tokens). */
+export function listSessions(options: ReadOptions = {}) {
+  return apiFetch<{ items: SessionInfo[] }>('/auth/sessions', options)
+}
+
+export function revokeSession(id: string): Promise<void> {
+  return apiFetch<void>(`/auth/sessions/${id}`, { method: 'DELETE' })
+}
+
+export function revokeOtherSessions(): Promise<void> {
+  return apiFetch<void>('/auth/sessions', { method: 'DELETE' })
+}
+
+/** A user session (api-contract §2); no token material is ever returned. */
+export interface SessionInfo {
+  id: string
+  userAgent?: string
+  ip?: string
+  createdAt: string
+  lastSeenAt: string
+  expiresAt: string
+  current?: boolean
 }
 
 /* ------------------------------------------------------------ GitHub §4 */

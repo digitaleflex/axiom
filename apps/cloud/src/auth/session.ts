@@ -1,20 +1,18 @@
 /**
- * INTERIM authentication session store.
+ * Client-side session state for the Axiom Cloud Console.
  *
- * Until #125 (identity provider), the Engine accepts a single bearer token
- * configured as `AXIOM_API_TOKEN` (api-contract §2). The console stores that
- * token in `sessionStorage` under the key `axiom.token` — NOT localStorage, so
- * it dies with the tab, and never in the URL.
+ * The Engine authenticates the console with an HttpOnly session cookie (#125);
+ * JavaScript never sees the session token. The only credential kept in memory
+ * is the CSRF token returned by `POST /auth/login` (and re-hydrated by
+ * `GET /auth/me`), which must accompany every mutating request in the
+ * `X-CSRF-Token` header (double-submit, api-contract §2).
  *
- * This is deliberately a small, isolated module: when #125 lands, replace this
- * implementation (and AuthContext) with the real provider. Nothing else should
- * read the storage key directly.
- *
- * Prohibited by docs/design/handoff/README.md §6.8: secrets/tokens in URLs,
- * logs or analytics. We only ever put the token in the Authorization header.
+ * It is deliberately memory-only: refreshing the page re-hydrates the CSRF
+ * token from `GET /auth/me` because the cookie persists. Nothing here is
+ * written to localStorage/sessionStorage. Return-path handling is the only
+ * persisted piece and it is not a secret.
  */
 
-export const TOKEN_STORAGE_KEY = 'axiom.token'
 export const RETURN_PATH_STORAGE_KEY = 'axiom.returnPath'
 
 function storage(): Storage | null {
@@ -25,20 +23,20 @@ function storage(): Storage | null {
   }
 }
 
-export function getToken(): string | null {
-  return storage()?.getItem(TOKEN_STORAGE_KEY) ?? null
+let csrfToken: string | null = null
+
+/** Set (or clear) the CSRF token for the current session. */
+export function setCsrfToken(token: string | null): void {
+  csrfToken = token && token.trim() !== '' ? token : null
 }
 
-export function setToken(token: string): void {
-  storage()?.setItem(TOKEN_STORAGE_KEY, token)
+/** Current CSRF token, or null when signed out. */
+export function getCsrfToken(): string | null {
+  return csrfToken
 }
 
-export function clearToken(): void {
-  storage()?.removeItem(TOKEN_STORAGE_KEY)
-}
-
-export function hasToken(): boolean {
-  return getToken() !== null
+export function clearCsrfToken(): void {
+  csrfToken = null
 }
 
 /** Canonical return path captured when the guard redirects to /login. */

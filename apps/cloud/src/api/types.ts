@@ -280,3 +280,16 @@ export interface Plan {
   healthCheck?: HealthCheck
   rollback?: { strategy?: string }
 }
+
+/** POST /auth/login and POST /auth/register (api-contract §2). */
+export interface AuthResult {
+  user: User
+  csrfToken: string
+}
+
+/** GET /auth/me (api-contract §2). */
+export interface Me {
+  id: string
+  name: string
+  csrfToken: string
+}

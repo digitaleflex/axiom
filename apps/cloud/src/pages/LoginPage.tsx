@@ -13,13 +13,18 @@ export function sanitizeReturnPath(value: string | null): string {
   return value
 }
 
+type Mode = 'signin' | 'signup'
+
 export function LoginPage() {
-  const { status, signIn } = useAuth()
+  const { status, signIn, signUp } = useAuth()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const returnTo = sanitizeReturnPath(searchParams.get('returnTo') ?? getReturnPath())
 
-  const [token, setToken] = useState('')
+  const [mode, setMode] = useState<Mode>('signin')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [name, setName] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<ApiError | null>(null)
 
@@ -36,7 +41,11 @@ export function LoginPage() {
     setSubmitting(true)
     setError(null)
     try {
-      await signIn(token)
+      if (mode === 'signin') {
+        await signIn(email, password)
+      } else {
+        await signUp(email, password, name || undefined)
+      }
       clearReturnPath()
       navigate(returnTo, { replace: true })
     } catch (cause) {
@@ -45,6 +54,8 @@ export function LoginPage() {
       setSubmitting(false)
     }
   }
+
+  const cannotSubmit = submitting || email.trim() === '' || password === ''
 
   return (
     <div className="login">
@@ -55,37 +66,80 @@ export function LoginPage() {
           </span>
           AXIOM
         </div>
-        <h1 className="login__title">Sign in to Cloud Console</h1>
+        <h1 className="login__title">
+          {mode === 'signin' ? 'Sign in to Cloud Console' : 'Create your Axiom account'}
+        </h1>
         <p className="login__body">
-          Authentication is interim until #125. Paste the Engine bearer token (<span className="mono">AXIOM_API_TOKEN</span>
-          ). It is kept in this tab&rsquo;s session storage and sent as{' '}
-          <span className="mono">Authorization: Bearer</span>.
+          Your session is a secure HttpOnly cookie; the only credential kept in this tab is the
+          CSRF token, held in memory.
         </p>
 
         {error && (
-          <InlineNotice variant="failed" title="Sign-in failed">
-            {error.isUnauthorized ? 'That token was rejected by the Engine.' : error.message}
+          <InlineNotice variant="failed" title={mode === 'signin' ? 'Sign-in failed' : 'Sign-up failed'}>
+            {error.isUnauthorized ? 'That email or password was rejected.' : error.message}
           </InlineNotice>
         )}
 
+        {mode === 'signup' && (
+          <div className="field">
+            <label className="field__label" htmlFor="name">
+              Name (optional)
+            </label>
+            <input
+              id="name"
+              className="field__input"
+              type="text"
+              autoComplete="name"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </div>
+        )}
+
         <div className="field">
-          <label className="field__label" htmlFor="token">
-            Bearer token
+          <label className="field__label" htmlFor="email">
+            Email
           </label>
           <input
-            id="token"
+            id="email"
             className="field__input"
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            value={token}
-            onChange={(event) => setToken(event.target.value)}
+            type="email"
+            autoComplete="email"
             required
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
           />
         </div>
 
-        <button className="btn btn--primary" type="submit" disabled={submitting || token.trim() === ''}>
-          {submitting ? 'Signing in…' : 'Sign in'}
+        <div className="field">
+          <label className="field__label" htmlFor="password">
+            Password
+          </label>
+          <input
+            id="password"
+            className="field__input"
+            type="password"
+            autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+            required
+            minLength={8}
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        </div>
+
+        <button className="btn btn--primary" type="submit" disabled={cannotSubmit}>
+          {submitting ? 'Please wait…' : mode === 'signin' ? 'Sign in' : 'Create account'}
+        </button>
+
+        <button
+          type="button"
+          className="btn btn--ghost"
+          onClick={() => {
+            setMode(mode === 'signin' ? 'signup' : 'signin')
+            setError(null)
+          }}
+        >
+          {mode === 'signin' ? 'Need an account? Sign up' : 'Already have an account? Sign in'}
         </button>
       </form>
     </div>

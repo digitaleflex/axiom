@@ -9,37 +9,41 @@ import {
 } from 'react'
 import { setUnauthorizedHandler } from '../api/client'
 import { ApiError } from '../api/errors'
-import { getMe, logout as apiLogout } from '../api/resources'
+import {
+  getMe,
+  login as apiLogin,
+  logout as apiLogout,
+  register as apiRegister,
+} from '../api/resources'
 import type { User } from '../api/types'
-import { clearReturnPath, clearToken, getToken, setToken } from './session'
+import { clearCsrfToken, clearReturnPath, setCsrfToken } from './session'
 
 /**
- * INTERIM auth boundary (see auth/session.ts). Validates the stored token
- * against `GET /auth/me` when possible; treats transport failures optimistically
- * so an unreachable Engine does not sign the user out. A 401 anywhere clears
- * the session and flips to `anonymous`, which lets RequireAuth redirect.
+ * Session-based auth boundary (#125). The Engine sets an HttpOnly session
+ * cookie; the console keeps only the CSRF token in memory and re-hydrates it
+ * via `GET /auth/me` on boot (the cookie persists across refreshes).
+ * Transport failures are treated optimistically so an unreachable Engine does
+ * not sign the user out; a 401 anywhere clears the session.
  */
 export type AuthStatus = 'loading' | 'authenticated' | 'anonymous'
 
 export interface AuthContextValue {
   status: AuthStatus
   user: User | null
-  token: string | null
-  signIn: (token: string) => Promise<void>
+  signIn: (email: string, password: string) => Promise<void>
+  signUp: (email: string, password: string, name?: string) => Promise<void>
   signOut: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [status, setStatus] = useState<AuthStatus>(() => (getToken() ? 'loading' : 'anonymous'))
+  const [status, setStatus] = useState<AuthStatus>('loading')
   const [user, setUser] = useState<User | null>(null)
-  const [token, setTokenState] = useState<string | null>(() => getToken())
 
   const becomeAnonymous = useCallback(() => {
-    clearToken()
+    clearCsrfToken()
     clearReturnPath()
-    setTokenState(null)
     setUser(null)
     setStatus('anonymous')
   }, [])
@@ -50,18 +54,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => setUnauthorizedHandler(null)
   }, [becomeAnonymous])
 
-  // Validate an existing token on boot.
+  // Re-hydrate the session (cookie + CSRF token) on boot.
   useEffect(() => {
-    const existing = getToken()
-    if (!existing) {
-      setStatus('anonymous')
-      return
-    }
     let active = true
     getMe()
       .then((me) => {
         if (!active) return
-        setUser(me)
+        setCsrfToken(me.csrfToken)
+        setUser({ id: me.id, name: me.name })
         setStatus('authenticated')
       })
       .catch((error: unknown) => {
@@ -70,34 +70,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           becomeAnonymous()
           return
         }
-        // Network / 503: keep the interim token, proceed optimistically.
-        setStatus('authenticated')
+        // Network / 503 with no known session: not authenticated.
+        becomeAnonymous()
       })
     return () => {
       active = false
     }
   }, [becomeAnonymous])
 
-  const signIn = useCallback(async (rawToken: string) => {
-    const next = rawToken.trim()
-    if (!next) throw new ApiError({ code: 'INVALID_REQUEST', message: 'Enter a token.', status: 400 })
-    setToken(next)
-    setTokenState(next)
-    try {
-      const me = await getMe()
-      setUser(me)
-      setStatus('authenticated')
-    } catch (error) {
-      if (error instanceof ApiError && error.isUnauthorized) {
-        clearToken()
-        setTokenState(null)
-        setStatus('anonymous')
-        throw error
-      }
-      // Could not validate (Engine unreachable) — accept the interim token.
-      setStatus('authenticated')
-    }
+  const startSession = useCallback(async (result: { user: User; csrfToken: string }) => {
+    setCsrfToken(result.csrfToken)
+    setUser(result.user)
+    setStatus('authenticated')
   }, [])
+
+  const signIn = useCallback(
+    async (email: string, password: string) => {
+      await startSession(await apiLogin(email, password))
+    },
+    [startSession],
+  )
+
+  const signUp = useCallback(
+    async (email: string, password: string, name?: string) => {
+      await startSession(await apiRegister(email, password, name))
+    },
+    [startSession],
+  )
 
   const signOut = useCallback(async () => {
     try {
@@ -109,8 +108,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [becomeAnonymous])
 
   const value = useMemo<AuthContextValue>(
-    () => ({ status, user, token, signIn, signOut }),
-    [status, user, token, signIn, signOut],
+    () => ({ status, user, signIn, signUp, signOut }),
+    [status, user, signIn, signUp, signOut],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

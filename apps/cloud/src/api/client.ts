@@ -1,4 +1,4 @@
-import { clearToken, getToken } from '../auth/session'
+import { clearCsrfToken, getCsrfToken } from '../auth/session'
 import { ApiError, parseErrorEnvelope } from './errors'
 
 /**
@@ -8,8 +8,9 @@ import { ApiError, parseErrorEnvelope } from './errors'
  *   default `http://localhost:8080`. The versioned prefix `/api/v1` is appended
  *   here (api-contract §1) so callers pass resource paths only.
  * - Every request carries `X-Request-ID` (generated client-side, matching
- *   `[A-Za-z0-9._-]{1,64}` per api-contract §18) and `Authorization: Bearer`
- *   from the interim session store.
+ *   `[A-Za-z0-9._-]{1,64}` per api-contract §18) and, when signed in, the
+ *   session cookie (`credentials: 'include'`). Mutating requests also send the
+ *   in-memory CSRF token in `X-CSRF-Token` (double-submit, api-contract §2).
  * - Errors are parsed into the typed {@link ApiError} from the
  *   `{ error: { code, message, requestId, details } }` envelope (§18).
  * - A 401 clears the interim token and notifies the registered handler so the
@@ -70,8 +71,8 @@ export interface RequestOptions {
   signal?: AbortSignal
   /** Explicit request id; otherwise generated. */
   requestId?: string
-  /** Skip the Authorization header (used by /auth/logout? no — logout is authed). */
-  skipAuth?: boolean
+  /** Skip the CSRF header (login/register are unauthenticated). */
+  skipCsrf?: boolean
 }
 
 export async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -84,9 +85,10 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
     ...options.headers,
   }
 
-  const token = getToken()
-  if (token && !options.skipAuth) {
-    headers.Authorization = `Bearer ${token}`
+  const mutating = method !== 'GET' && method !== 'HEAD'
+  if (mutating && !options.skipCsrf) {
+    const csrf = getCsrfToken()
+    if (csrf) headers['X-CSRF-Token'] = csrf
   }
 
   let body: BodyInit | undefined
@@ -106,6 +108,7 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
       headers,
       body,
       signal: options.signal,
+      credentials: 'include',
     })
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
@@ -140,7 +143,7 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
         })
 
     if (error.isUnauthorized) {
-      clearToken()
+      clearCsrfToken()
       unauthorizedHandler?.()
     }
     throw error
