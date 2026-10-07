@@ -52,3 +52,5 @@ Axiom may later support additional runtime isolation technologies, broader infra
 - Agent marketplace
 
 The internal agent system supports bounded platform responsibilities; it is not the primary end-user product model.
+
+Full V0.1 matrix and rationale: [`v0.1-scope.md`](v0.1-scope.md). Platform vs domain-project responsibilities: [`scope.md`](scope.md). Terminology: [`glossary.md`](glossary.md).
