@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"github.com/digitaleflex/axiom/services/engine/internal/logs"
 	"io"
 	"log/slog"
 	"mime"
@@ -27,7 +28,9 @@ func (a *API) wrap(h handlerFunc) http.HandlerFunc {
 func (a *API) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	apiErr := fromDomain(err)
 	if apiErr.Status >= 500 {
-		a.log.Error("request failed", "requestId", requestID(r.Context()), "method", r.Method, "path", r.URL.Path, "error", err)
+		// Server-side detail only, with secrets redacted: the message is
+		// never returned to the client (stable INTERNAL_ERROR instead).
+		a.log.Error("request failed", "requestId", requestID(r.Context()), "method", r.Method, "path", r.URL.Path, "error", logs.Redact(err.Error()))
 	}
 	details := apiErr.Details
 	if details == nil {
@@ -110,4 +113,16 @@ func pageResponse[T any](items []T, p page, total int) map[string]any {
 		items = []T{}
 	}
 	return map[string]any{"items": items, "page": p.Page, "limit": p.Limit, "total": total}
+}
+
+// audit records privileged operations: actor, action, target, result,
+// request ID and timestamp (structured log; queryable trail in #128).
+// Secrets must never appear in action or target strings.
+func (a *API) audit(r *http.Request, action, target string, err error) {
+	result := "ok"
+	if err != nil {
+		result = "error"
+	}
+	a.log.Info("audit", "requestId", requestID(r.Context()), "actor", principal(r.Context()).UserID,
+		"action", action, "target", target, "result", result)
 }

@@ -180,7 +180,9 @@ func (a *API) getServer(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (a *API) registerServer(w http.ResponseWriter, r *http.Request) error {
+func (a *API) registerServer(w http.ResponseWriter, r *http.Request) (err error) {
+	target := ""
+	defer func() { a.audit(r, "server.register", target, err) }()
 	if a.servers == nil {
 		return errUnavailable
 	}
@@ -196,6 +198,7 @@ func (a *API) registerServer(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	w.Header().Set("Location", "/api/v1/servers/"+rec.ID)
+	target = rec.ID
 	writeJSON(w, http.StatusCreated, toServerDTO(rec))
 	return nil
 }
@@ -218,7 +221,9 @@ func (a *API) renameServer(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (a *API) removeServer(w http.ResponseWriter, r *http.Request) error {
+func (a *API) removeServer(w http.ResponseWriter, r *http.Request) (err error) {
+	target := r.PathValue("serverID")
+	defer func() { a.audit(r, "server.remove", target, err) }()
 	if a.servers == nil {
 		return errUnavailable
 	}
@@ -242,7 +247,9 @@ func (a *API) serverHealth(w http.ResponseWriter, r *http.Request) error {
 
 // --- deployments --------------------------------------------------------------
 
-func (a *API) createDeployment(w http.ResponseWriter, r *http.Request) error {
+func (a *API) createDeployment(w http.ResponseWriter, r *http.Request) (err error) {
+	target := r.PathValue("applicationID")
+	defer func() { a.audit(r, "deployment.create", target, err) }()
 	if a.deployments == nil {
 		return errUnavailable
 	}
@@ -273,6 +280,7 @@ func (a *API) createDeployment(w http.ResponseWriter, r *http.Request) error {
 	if !created {
 		w.Header().Set("Idempotent-Replayed", "true")
 	}
+	target = rec.ID
 	writeJSON(w, http.StatusAccepted, rec)
 	return nil
 }
@@ -352,7 +360,9 @@ func (a *API) getDeployment(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (a *API) cancelDeployment(w http.ResponseWriter, r *http.Request) error {
+func (a *API) cancelDeployment(w http.ResponseWriter, r *http.Request) (err error) {
+	target := r.PathValue("deploymentID")
+	defer func() { a.audit(r, "deployment.cancel", target, err) }()
 	rec, err := a.loadDeployment(r)
 	if err != nil {
 		return err

@@ -84,7 +84,9 @@ func (a *API) listDomains(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (a *API) addDomain(w http.ResponseWriter, r *http.Request) error {
+func (a *API) addDomain(w http.ResponseWriter, r *http.Request) (err error) {
+	target := r.PathValue("applicationID")
+	defer func() { a.audit(r, "domain.add", target, err) }()
 	if a.domains == nil {
 		return errUnavailable
 	}
@@ -112,11 +114,14 @@ func (a *API) addDomain(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	w.Header().Set("Location", "/api/v1/domains/"+rec.ID)
+	target = rec.ID
 	writeJSON(w, http.StatusCreated, a.withTarget(r.Context(), rec))
 	return nil
 }
 
-func (a *API) removeDomain(w http.ResponseWriter, r *http.Request) error {
+func (a *API) removeDomain(w http.ResponseWriter, r *http.Request) (err error) {
+	target := r.PathValue("domainID")
+	defer func() { a.audit(r, "domain.remove", target, err) }()
 	rec, err := a.ownedDomain(r)
 	if err != nil {
 		return err
@@ -128,7 +133,9 @@ func (a *API) removeDomain(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (a *API) setPrimaryDomain(w http.ResponseWriter, r *http.Request) error {
+func (a *API) setPrimaryDomain(w http.ResponseWriter, r *http.Request) (err error) {
+	target := r.PathValue("domainID")
+	defer func() { a.audit(r, "domain.set_primary", target, err) }()
 	rec, err := a.ownedDomain(r)
 	if err != nil {
 		return err

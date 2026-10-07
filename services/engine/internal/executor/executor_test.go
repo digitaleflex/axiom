@@ -82,13 +82,14 @@ func setup(t *testing.T) (*deployment.Service, deployment.Record, planner.Plan) 
 		t.Fatal(err)
 	}
 	plan := planner.Plan{
-		ID: "plan_1", ApplicationID: "app_1", Strategy: "nextjs",
+		ID: "plan_1", SchemaVersion: 1, Status: "READY", ApplicationID: "app_1",
+		ApplicationProfileVersion: 3, Strategy: "nextjs",
 		Source:   profile.Source{RepositoryID: "repo_1", Ref: "main", Commit: commit},
-		ServerID: "srv_1",
+		ServerID: "srv_1", Environment: "production",
 		Build:    planner.BuildPlan{Strategy: "source", PackageManager: "pnpm", Command: "pnpm run build"},
 		Runtime:  planner.RuntimePlan{Type: "node", StartCommand: "pnpm start", Port: 3000},
 		Network:  planner.NetworkPlan{Proxy: "traefik", Domain: "app.example.com", TLS: true, ExposedPort: 3000},
-		Health:   planner.HealthPlan{Type: "http", Path: "/", TimeoutSeconds: 5},
+		Health:   planner.HealthPlan{Type: "http", Path: "/", TimeoutSeconds: 5, IntervalSeconds: 3, Retries: 20},
 		Rollback: planner.RollbackPlan{Strategy: "keep_previous_until_verified"},
 		Steps:    allSteps,
 	}

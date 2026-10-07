@@ -12,6 +12,7 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/health"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner"
+	"github.com/digitaleflex/axiom/services/engine/internal/policy"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
 )
 
@@ -21,6 +22,7 @@ const (
 	ErrorRuntimeFailed     = "RUNTIME_FAILED"
 	ErrorHealthCheckFailed = "HEALTH_CHECK_FAILED"
 	ErrorNotEligible       = "DEPLOYMENT_NOT_ELIGIBLE"
+	ErrorPolicyDenied      = "POLICY_DENIED"
 )
 
 // Step timeouts. VERIFY is computed from the plan health policy; the rest are
@@ -73,12 +75,17 @@ func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error)
 	// Eligibility pre-flight: the server may have changed since plan review.
 	if e.Servers != nil {
 		if err := e.checkServer(ctx, req.Plan); err != nil {
-			// Record the failure before failing so the deployment explains itself.
-			if _, terr := e.deployments.Transition(ctx, id, deployment.StateBuilding); terr == nil {
-				return e.fail(ctx, id, ErrorNotEligible, err)
-			}
+			_, _ = e.deployments.Transition(ctx, id, deployment.StateBuilding)
 			return e.fail(ctx, id, ErrorNotEligible, err)
 		}
+	}
+
+	// Policy gate: no operation is dispatched unless the plan is authorized.
+	// The check runs after eligibility so denials name the operative reason.
+	if decision := policy.Evaluate(req.Plan, req.Plan.ServerID); !decision.Allow {
+		_, _ = e.deployments.Transition(ctx, id, deployment.StateBuilding)
+		log.Warn("deployment denied by policy", "reasons", decision.Reasons)
+		return e.fail(ctx, id, ErrorPolicyDenied, errors.New("deployment denied by policy: "+strings.Join(decision.Reasons, "; ")))
 	}
 
 	if _, err := e.deployments.Transition(ctx, id, deployment.StateBuilding); err != nil {

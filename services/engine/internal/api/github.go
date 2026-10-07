@@ -80,12 +80,14 @@ func (a *API) listGitHubConnections(w http.ResponseWriter, r *http.Request) erro
 	return nil
 }
 
-func (a *API) disconnectGitHub(w http.ResponseWriter, r *http.Request) error {
+func (a *API) disconnectGitHub(w http.ResponseWriter, r *http.Request) (err error) {
+	target := r.PathValue("connectionID")
+	defer func() { a.audit(r, "github.disconnect", target, err) }()
 	if a.github == nil {
 		return newError(http.StatusServiceUnavailable, CodeServiceUnavailable, "GitHub integration is not configured", nil)
 	}
 	id := r.PathValue("connectionID")
-	err := a.github.Disconnect(r.Context(), principal(r.Context()).UserID, id)
+	err = a.github.Disconnect(r.Context(), principal(r.Context()).UserID, id)
 	if errors.Is(err, ghauth.ErrNotFound) {
 		return errNotFound("connection", id)
 	}

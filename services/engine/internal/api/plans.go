@@ -16,7 +16,9 @@ type Plans interface {
 	Get(ctx context.Context, id string) (planner.PlanView, error)
 }
 
-func (a *API) createPlan(w http.ResponseWriter, r *http.Request) error {
+func (a *API) createPlan(w http.ResponseWriter, r *http.Request) (err error) {
+	target := r.PathValue("applicationID")
+	defer func() { a.audit(r, "plan.create", target, err) }()
 	if a.plans == nil {
 		return errUnavailable
 	}
@@ -50,6 +52,7 @@ func (a *API) createPlan(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	w.Header().Set("Location", "/api/v1/deployment-plans/"+plan.ID)
+	target = plan.ID
 	writeJSON(w, http.StatusCreated, planner.PlanView{Plan: plan})
 	return nil
 }

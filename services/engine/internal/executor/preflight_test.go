@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -122,5 +123,25 @@ func TestNoCheckerSkipsPreflight(t *testing.T) {
 	res, err := ex.Execute(context.Background(), Request{DeploymentID: rec.ID, Container: "c", Source: fakeSource{}, Plan: plan})
 	if err != nil || res.Deployment.Status != deployment.StateLive {
 		t.Fatalf("without checker: %v", err)
+	}
+}
+
+func TestPolicyDeniesTamperedPlan(t *testing.T) {
+	svc, rec, plan := setup(t)
+	plan.Runtime.Port = 9999 // tampered after fingerprinting is out of scope here: invalid plan
+	plan.Fingerprint = "sha256:" + strings.Repeat("0", 64)
+	spy := &buildSpy{}
+	ex := New(svc, spy, &fakeAgent{})
+	ex.Backoff = nil
+	_, err := ex.Execute(context.Background(), Request{DeploymentID: rec.ID, Container: "c", Source: fakeSource{}, Plan: plan})
+	if err == nil || !strings.Contains(err.Error(), "denied by policy") {
+		t.Fatalf("tampered plan must be denied, got %v", err)
+	}
+	if spy.calls != 0 {
+		t.Fatal("denied plans must not build")
+	}
+	got, _ := svc.Get(context.Background(), rec.ID)
+	if got.Status != deployment.StateFailed || got.ErrorCode != ErrorPolicyDenied {
+		t.Fatalf("status=%s code=%s", got.Status, got.ErrorCode)
 	}
 }
