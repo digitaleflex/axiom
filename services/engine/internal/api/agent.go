@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/agentauth"
+	"github.com/digitaleflex/axiom/services/engine/internal/authz"
 )
 
 // agentPublicPaths are agent-facing endpoints that authenticate with the
@@ -36,9 +37,19 @@ func (a *API) authenticateWithAgents(next http.Handler) http.Handler {
 // User-authenticated. 404 unknown server, 409 non-pending server.
 func (a *API) bootstrapServer(w http.ResponseWriter, r *http.Request) (err error) {
 	target := r.PathValue("serverID")
-	defer func() { a.audit(r, "server.bootstrap", target, err) }()
+	defer func() { a.audit(r, "server.bootstrap", target, "", err) }()
 	if a.agents == nil {
 		return errUnavailable
+	}
+	// authz defense-in-depth: the caller must own the server.
+	if a.servers != nil {
+		if s, loadErr := a.servers.Get(r.Context(), target); loadErr == nil {
+			if ok, _ := a.authorize(r, authz.ActionServerWrite, authz.Resource{
+				Type: "server", ID: s.ID, OwnerID: s.OwnerID,
+			}); !ok {
+				return errNotFound("server", target)
+			}
+		}
 	}
 	token, expires, err := a.agents.Issue(r.Context(), target)
 	switch {

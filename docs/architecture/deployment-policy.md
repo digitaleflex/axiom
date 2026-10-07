@@ -43,4 +43,4 @@
 
 ## 6. Audit
 
-Privileged mutations emit structured `audit` log lines with actor, action, target, result and request ID: `deployment.create/cancel`, `plan.create`, `domain.add/remove/set_primary`, `server.register/remove`, `github.disconnect`. Success and failure are both recorded; secrets never appear. Queryable persistence is #128.
+Privileged mutations emit audit events with actor, action, target, result, request ID and timestamp: `deployment.create/cancel`, `plan.create`, `domain.add/remove/set_primary`, `server.register/remove`, `github.disconnect`, `appconfig.set/delete`. Success and failure are both recorded; secrets are redacted before persistence (#128, `audit_events` table). The trail is readable via `GET /api/v1/audit` (owner-scoped).

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/digitaleflex/axiom/services/engine/internal/authz"
 	ghauth "github.com/digitaleflex/axiom/services/engine/internal/github/auth"
 	"github.com/digitaleflex/axiom/services/engine/internal/github/repos"
 )
@@ -29,6 +30,12 @@ type GitHubConnections interface {
 func (a *API) startGitHubConnection(w http.ResponseWriter, r *http.Request) error {
 	if a.github == nil {
 		return newError(http.StatusServiceUnavailable, CodeServiceUnavailable, "GitHub integration is not configured", nil)
+	}
+	// authz: the caller manages their own GitHub connection.
+	if ok, _ := a.authorize(r, authz.ActionGitHubManage, authz.Resource{
+		Type: "github", OwnerID: principal(r.Context()).UserID,
+	}); !ok {
+		return newError(http.StatusForbidden, CodeForbidden, "GitHub connection management is not allowed", nil)
 	}
 	authorizeURL, secret, err := a.github.Start(r.Context(), principal(r.Context()).UserID)
 	if err != nil {
@@ -82,9 +89,15 @@ func (a *API) listGitHubConnections(w http.ResponseWriter, r *http.Request) erro
 
 func (a *API) disconnectGitHub(w http.ResponseWriter, r *http.Request) (err error) {
 	target := r.PathValue("connectionID")
-	defer func() { a.audit(r, "github.disconnect", target, err) }()
+	defer func() { a.audit(r, "github.disconnect", target, principal(r.Context()).UserID, err) }()
 	if a.github == nil {
 		return newError(http.StatusServiceUnavailable, CodeServiceUnavailable, "GitHub integration is not configured", nil)
+	}
+	// authz: the caller manages their own GitHub connection.
+	if ok, _ := a.authorize(r, authz.ActionGitHubManage, authz.Resource{
+		Type: "github", OwnerID: principal(r.Context()).UserID,
+	}); !ok {
+		return newError(http.StatusForbidden, CodeForbidden, "GitHub connection management is not allowed", nil)
 	}
 	id := r.PathValue("connectionID")
 	err = a.github.Disconnect(r.Context(), principal(r.Context()).UserID, id)

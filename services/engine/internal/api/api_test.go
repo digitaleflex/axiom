@@ -168,8 +168,8 @@ func newHarness(t *testing.T) *harness {
 		"app_other": {ID: "app_other", Name: "other", RepositoryID: "repo_2", OwnerID: "usr_2"},
 	}}
 	servers := &fakeServers{items: []server.Record{
-		{ID: "srv_1", Name: "srv-eu-1", Address: "203.0.113.10", Status: server.StatusReady, AgentVersion: "0.1.3", Capabilities: []server.Capability{server.CapabilityDocker}, CPUCount: 4, MemoryMB: 8192, DiskFreeMB: 50000},
-		{ID: "srv_2", Name: "srv-eu-2", Status: server.StatusOffline},
+		{ID: "srv_1", Name: "srv-eu-1", Address: "203.0.113.10", OwnerID: "usr_1", Status: server.StatusReady, AgentVersion: "0.1.3", Capabilities: []server.Capability{server.CapabilityDocker}, CPUCount: 4, MemoryMB: 8192, DiskFreeMB: 50000},
+		{ID: "srv_2", Name: "srv-eu-2", OwnerID: "usr_1", Status: server.StatusOffline},
 	}}
 	h := New(Deps{
 		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),

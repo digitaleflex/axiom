@@ -39,7 +39,7 @@ type heartbeatRequest struct {
 // fresh write and every subsequent read derives staleness itself.
 func (a *API) agentHeartbeat(w http.ResponseWriter, r *http.Request) (err error) {
 	target := r.Header.Get("X-Agent-ID")
-	defer func() { a.audit(r, "agent.heartbeat", target, err) }()
+	defer func() { a.audit(r, "agent.heartbeat", target, "", err) }()
 	if a.agents == nil {
 		return errUnavailable
 	}

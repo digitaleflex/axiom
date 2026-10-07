@@ -31,7 +31,7 @@ func newAgentHarness(t *testing.T, buf *bytes.Buffer) *agentHarness {
 	handler := New(Deps{
 		Log:     slog.New(slog.NewJSONHandler(buf, nil)),
 		Auth:    NewTokenAuthenticator(token, Principal{UserID: "usr_1", Name: "Jane"}),
-		Servers: &fakeServers{items: []server.Record{{ID: "srv_pending", Status: server.StatusPending}}},
+		Servers: &fakeServers{items: []server.Record{{ID: "srv_pending", OwnerID: "usr_1", Status: server.StatusPending}}},
 		Agents:  agents,
 	})
 	return &agentHarness{

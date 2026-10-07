@@ -36,7 +36,7 @@ func newHeartbeatHarness(t *testing.T) *heartbeatHarness {
 		agentauth.WithServerLookup(agentauth.StaticServers(statuses)),
 	)
 	hs := &healthServers{
-		fakeServers: &fakeServers{items: []server.Record{{ID: "srv_pending", Status: server.StatusPending}}},
+		fakeServers: &fakeServers{items: []server.Record{{ID: "srv_pending", OwnerID: "usr_1", Status: server.StatusPending}}},
 		health:      map[string]server.Health{},
 	}
 	handler := New(Deps{

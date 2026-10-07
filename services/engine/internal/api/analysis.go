@@ -8,6 +8,7 @@ import (
 
 	"github.com/digitaleflex/axiom/services/engine/internal/analysis"
 	"github.com/digitaleflex/axiom/services/engine/internal/application"
+	"github.com/digitaleflex/axiom/services/engine/internal/authz"
 	"github.com/digitaleflex/axiom/services/engine/internal/profile"
 )
 
@@ -27,6 +28,12 @@ func (a *API) startAnalysis(w http.ResponseWriter, r *http.Request) error {
 	app, err := a.ownedApplication(r, r.PathValue("applicationID"))
 	if err != nil {
 		return err
+	}
+	// authz defense-in-depth: the caller must own the application.
+	if ok, _ := a.authorize(r, authz.ActionApplicationWrite, authz.Resource{
+		Type: "application", ID: app.ID, OwnerID: app.OwnerID,
+	}); !ok {
+		return errNotFound("application", app.ID)
 	}
 	var in struct {
 		Ref  string  `json:"ref"`
@@ -92,6 +99,12 @@ func (a *API) putOverrides(w http.ResponseWriter, r *http.Request) error {
 	app, err := a.ownedApplication(r, r.PathValue("applicationID"))
 	if err != nil {
 		return err
+	}
+	// authz defense-in-depth: the caller must own the application.
+	if ok, _ := a.authorize(r, authz.ActionApplicationWrite, authz.Resource{
+		Type: "application", ID: app.ID, OwnerID: app.OwnerID,
+	}); !ok {
+		return errNotFound("application", app.ID)
 	}
 	var h profile.Hints
 	if err := decodeJSON(w, r, &h); err != nil {

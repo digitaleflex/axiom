@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/application"
+	"github.com/digitaleflex/axiom/services/engine/internal/authz"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/executor"
 	"github.com/digitaleflex/axiom/services/engine/internal/logs"
@@ -71,15 +72,26 @@ func (a *API) createApplication(w http.ResponseWriter, r *http.Request) error {
 
 // ownedApplication loads an application visible to the caller. Applications
 // owned by someone else are reported as not found (no existence leak).
+// Ownership is resolved through authz (#127); the 404-hiding rule is the
+// deliberate V0.1 divergence from FORBIDDEN semantics.
 func (a *API) ownedApplication(r *http.Request, id string) (application.Record, error) {
 	if a.applications == nil {
 		return application.Record{}, errUnavailable
 	}
 	rec, err := a.applications.Get(r.Context(), id)
-	if errors.Is(err, application.ErrNotFound) || (err == nil && rec.OwnerID != principal(r.Context()).UserID) {
+	if errors.Is(err, application.ErrNotFound) {
 		return application.Record{}, errNotFound("application", id)
 	}
-	return rec, err
+	if err != nil {
+		return application.Record{}, err
+	}
+	rel, err := a.authz.Resolve(r.Context(), a.actorOf(r), authz.Resource{
+		Type: "application", ID: rec.ID, OwnerID: rec.OwnerID,
+	})
+	if err != nil || rel != authz.RelationshipOwner {
+		return application.Record{}, errNotFound("application", id)
+	}
+	return rec, nil
 }
 
 func (a *API) getApplication(w http.ResponseWriter, r *http.Request) error {
@@ -169,9 +181,15 @@ func (a *API) getServer(w http.ResponseWriter, r *http.Request) error {
 
 func (a *API) registerServer(w http.ResponseWriter, r *http.Request) (err error) {
 	target := ""
-	defer func() { a.audit(r, "server.register", target, err) }()
+	defer func() { a.audit(r, "server.register", target, principal(r.Context()).UserID, err) }()
 	if a.servers == nil {
 		return errUnavailable
+	}
+	// authz: the caller registers a server they will own.
+	if ok, _ := a.authorize(r, authz.ActionServerRegister, authz.Resource{
+		Type: "server", OwnerID: principal(r.Context()).UserID,
+	}); !ok {
+		return newError(http.StatusForbidden, CodeForbidden, "server registration is not allowed", nil)
 	}
 	var in struct {
 		Name    string `json:"name"`
@@ -194,6 +212,16 @@ func (a *API) renameServer(w http.ResponseWriter, r *http.Request) error {
 	if a.servers == nil {
 		return errUnavailable
 	}
+	s, err := a.loadServer(r)
+	if err != nil {
+		return err
+	}
+	// authz defense-in-depth: the caller must own the server.
+	if ok, _ := a.authorize(r, authz.ActionServerWrite, authz.Resource{
+		Type: "server", ID: s.ID, OwnerID: s.OwnerID,
+	}); !ok {
+		return errNotFound("server", s.ID)
+	}
 	var in struct {
 		Name string `json:"name"`
 	}
@@ -210,9 +238,20 @@ func (a *API) renameServer(w http.ResponseWriter, r *http.Request) error {
 
 func (a *API) removeServer(w http.ResponseWriter, r *http.Request) (err error) {
 	target := r.PathValue("serverID")
-	defer func() { a.audit(r, "server.remove", target, err) }()
+	var s server.Record
+	defer func() { a.audit(r, "server.remove", target, s.OwnerID, err) }()
 	if a.servers == nil {
 		return errUnavailable
+	}
+	s, err = a.loadServer(r)
+	if err != nil {
+		return err
+	}
+	// authz defense-in-depth: the caller must own the server.
+	if ok, _ := a.authorize(r, authz.ActionServerRemove, authz.Resource{
+		Type: "server", ID: s.ID, OwnerID: s.OwnerID,
+	}); !ok {
+		return errNotFound("server", s.ID)
 	}
 	id := r.PathValue("serverID")
 	if err := a.servers.Remove(r.Context(), id); err != nil {
@@ -236,13 +275,20 @@ func (a *API) serverHealth(w http.ResponseWriter, r *http.Request) error {
 
 func (a *API) createDeployment(w http.ResponseWriter, r *http.Request) (err error) {
 	target := r.PathValue("applicationID")
-	defer func() { a.audit(r, "deployment.create", target, err) }()
+	var app application.Record
+	defer func() { a.audit(r, "deployment.create", target, app.OwnerID, err) }()
 	if a.deployments == nil {
 		return errUnavailable
 	}
-	app, err := a.ownedApplication(r, r.PathValue("applicationID"))
+	app, err = a.ownedApplication(r, r.PathValue("applicationID"))
 	if err != nil {
 		return err
+	}
+	// authz defense-in-depth: the caller must own the application.
+	if ok, _ := a.authorize(r, authz.ActionDeploymentCreate, authz.Resource{
+		Type: "application", ID: app.ID, OwnerID: app.OwnerID,
+	}); !ok {
+		return errNotFound("application", app.ID)
 	}
 	key := r.Header.Get("Idempotency-Key")
 	if len(key) > 255 {
@@ -305,7 +351,8 @@ func (a *API) listDeployments(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// loadDeployment returns a deployment the caller may access.
+// loadDeployment returns a deployment the caller may access. Deployments
+// owned by someone else are reported as not found (no existence leak).
 func (a *API) loadDeployment(r *http.Request) (deployment.Record, error) {
 	if a.deployments == nil {
 		return deployment.Record{}, errUnavailable
@@ -318,14 +365,29 @@ func (a *API) loadDeployment(r *http.Request) (deployment.Record, error) {
 	if err != nil {
 		return deployment.Record{}, err
 	}
-	if _, err := a.ownedApplication(r, rec.ApplicationID); err != nil {
-		var apiErr *Error
-		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
-			return deployment.Record{}, errNotFound("deployment", id)
-		}
-		return deployment.Record{}, err
+	// authz: the caller must own the deployment's application.
+	rel, err := a.authz.Resolve(r.Context(), a.actorOf(r), authz.Resource{
+		Type: "application", ID: rec.ApplicationID, OwnerID: a.appOwnerID(r, rec.ApplicationID),
+	})
+	if err != nil || rel != authz.RelationshipOwner {
+		return deployment.Record{}, errNotFound("deployment", id)
 	}
 	return rec, nil
+}
+
+// appOwnerID resolves the owner of an application, returning "" when the
+// application is unknown. It lets child-resource checks (deployments,
+// domains, config) authorize against the parent application's owner without
+// a second lookup.
+func (a *API) appOwnerID(r *http.Request, appID string) string {
+	if a.applications == nil {
+		return ""
+	}
+	rec, err := a.applications.Get(r.Context(), appID)
+	if err != nil {
+		return ""
+	}
+	return rec.OwnerID
 }
 
 // ownedDeployment guards non-API handlers (SSE) with the same access check.
@@ -350,10 +412,16 @@ func (a *API) getDeployment(w http.ResponseWriter, r *http.Request) error {
 
 func (a *API) cancelDeployment(w http.ResponseWriter, r *http.Request) (err error) {
 	target := r.PathValue("deploymentID")
-	defer func() { a.audit(r, "deployment.cancel", target, err) }()
+	defer func() { a.audit(r, "deployment.cancel", target, principal(r.Context()).UserID, err) }()
 	rec, err := a.loadDeployment(r)
 	if err != nil {
 		return err
+	}
+	// authz defense-in-depth: the caller must own the deployment's application.
+	if ok, _ := a.authorize(r, authz.ActionDeploymentCancel, authz.Resource{
+		Type: "application", ID: rec.ApplicationID, OwnerID: a.appOwnerID(r, rec.ApplicationID),
+	}); !ok {
+		return errNotFound("deployment", rec.ID)
 	}
 	rec, err = a.deployments.Cancel(r.Context(), rec.ID)
 	if err != nil {

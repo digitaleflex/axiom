@@ -59,7 +59,8 @@ func TestFreshMigrationCreatesV01Schema(t *testing.T) {
 	}
 
 	want := []string{"users", "github_connections", "repositories", "applications", "servers",
-		"deployment_plans", "deployments", "deployment_steps", "deployment_events", "idempotency_keys", "domains"}
+		"deployment_plans", "deployments", "deployment_steps", "deployment_events", "idempotency_keys", "domains",
+		"audit_events"}
 	for _, table := range want {
 		var exists bool
 		err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1)`, table).Scan(&exists)

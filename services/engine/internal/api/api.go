@@ -10,7 +10,9 @@ import (
 
 	"github.com/digitaleflex/axiom/services/engine/internal/agentauth"
 	"github.com/digitaleflex/axiom/services/engine/internal/application"
+	"github.com/digitaleflex/axiom/services/engine/internal/audit"
 	"github.com/digitaleflex/axiom/services/engine/internal/auth"
+	"github.com/digitaleflex/axiom/services/engine/internal/authz"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
 )
@@ -28,6 +30,13 @@ type Servers interface {
 
 // ServerStore is the read model for servers.
 type ServerStore = Servers
+
+// AuditService records privileged operation events (#128). It is satisfied
+// by *audit.Service and by test fakes.
+type AuditService interface {
+	Record(ctx context.Context, e audit.Event) error
+	List(ctx context.Context, f audit.Filter) ([]audit.Event, error)
+}
 
 // Deps are the API dependencies, injected by the composition root.
 // A nil dependency makes the corresponding endpoints answer 503.
@@ -50,6 +59,12 @@ type Deps struct {
 	AppConfig    AppConfig
 	// Agents owns agent registration and credential lifecycle (#76/#77).
 	Agents *agentauth.Service
+	// Authz is the authorization boundary (#127). A nil resolver denies
+	// every non-owner action (fail closed).
+	Authz *authz.Resolver
+	// Audit records privileged operation events (#128). A nil service
+	// falls back to structured log lines only.
+	Audit AuditService
 	// ConsoleURL is where the GitHub callback redirects the browser.
 	ConsoleURL string
 	// SecureCookies sets the Secure attribute on cookies (production).
@@ -61,6 +76,8 @@ type API struct {
 	log          *slog.Logger
 	auth         Authenticator
 	authSvc      *auth.Service
+	authz        *authz.Resolver
+	auditSvc     AuditService
 	deployments  *deployment.Service
 	applications application.Store
 	servers      ServerStore
@@ -81,7 +98,7 @@ type API struct {
 // request ID → recover → access log → authentication → routes.
 func New(d Deps) http.Handler {
 	a := &API{
-		log: d.Log, auth: d.Auth, authSvc: d.Sessions, deployments: d.Deployments,
+		log: d.Log, auth: d.Auth, authSvc: d.Sessions, authz: d.Authz, auditSvc: d.Audit, deployments: d.Deployments,
 		applications: d.Applications, servers: d.Servers, github: d.GitHub, repos: d.Repositories, analyses: d.Analyses, plans: d.Plans, domains: d.Domains, logs: d.Logs, appConfig: d.AppConfig,
 		agents:     d.Agents,
 		consoleURL: d.ConsoleURL, secure: d.SecureCookies, mux: http.NewServeMux(),
@@ -91,6 +108,9 @@ func New(d Deps) http.Handler {
 	}
 	if a.auth == nil {
 		a.auth = denyAll{}
+	}
+	if a.authz == nil {
+		a.authz = authz.NewResolver(nil) // V0.1: single-user ownership
 	}
 
 	r := a.mux
@@ -131,6 +151,8 @@ func New(d Deps) http.Handler {
 
 	r.HandleFunc("POST /api/v1/applications/{applicationID}/deployment-plans", a.wrap(a.createPlan))
 	r.HandleFunc("GET /api/v1/deployment-plans/{planID}", a.wrap(a.getPlan))
+
+	r.HandleFunc("GET /api/v1/audit", a.wrap(a.listAuditEvents))
 
 	r.HandleFunc("POST /api/v1/servers", a.wrap(a.registerServer))
 	r.HandleFunc("GET /api/v1/servers", a.wrap(a.listServers))

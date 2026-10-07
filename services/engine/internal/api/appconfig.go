@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/digitaleflex/axiom/services/engine/internal/authz"
 	appconfig "github.com/digitaleflex/axiom/services/engine/internal/secrets"
 	secsecrets "github.com/digitaleflex/axiom/services/engine/internal/security/secrets"
 )
@@ -43,6 +44,12 @@ func (a *API) setAppConfig(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	// authz defense-in-depth: the caller must own the application.
+	if ok, _ := a.authorize(r, authz.ActionConfigWrite, authz.Resource{
+		Type: "application", ID: app.ID, OwnerID: app.OwnerID,
+	}); !ok {
+		return errNotFound("application", app.ID)
+	}
 	name := r.PathValue("name")
 	var in struct {
 		Value  string `json:"value"`
@@ -61,7 +68,7 @@ func (a *API) setAppConfig(w http.ResponseWriter, r *http.Request) error {
 		}
 		return err
 	}
-	a.audit(r, "appconfig.set", app.ID+"/"+name, nil)
+	a.audit(r, "appconfig.set", app.ID+"/"+name, app.OwnerID, nil)
 	w.WriteHeader(http.StatusNoContent)
 	return nil
 }
@@ -81,7 +88,7 @@ func (a *API) deleteAppConfig(w http.ResponseWriter, r *http.Request) error {
 		}
 		return err
 	}
-	a.audit(r, "appconfig.delete", app.ID+"/"+name, nil)
+	a.audit(r, "appconfig.delete", app.ID+"/"+name, app.OwnerID, nil)
 	w.WriteHeader(http.StatusNoContent)
 	return nil
 }

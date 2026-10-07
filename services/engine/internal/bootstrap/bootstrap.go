@@ -19,7 +19,9 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/analysis"
 	"github.com/digitaleflex/axiom/services/engine/internal/api"
 	"github.com/digitaleflex/axiom/services/engine/internal/api/sse"
+	"github.com/digitaleflex/axiom/services/engine/internal/audit"
 	"github.com/digitaleflex/axiom/services/engine/internal/auth"
+	"github.com/digitaleflex/axiom/services/engine/internal/authz"
 	"github.com/digitaleflex/axiom/services/engine/internal/config"
 	"github.com/digitaleflex/axiom/services/engine/internal/database"
 	deploymentdb "github.com/digitaleflex/axiom/services/engine/internal/database/deployment"
@@ -127,6 +129,8 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 	// configured, remains a documented machine-access escape hatch.
 	authSvc := auth.NewService(auth.NewPGStore(db), auth.WithSessionTTL(cfg.SessionTTL))
 	deps.Sessions = authSvc
+	// Authorization (#127): V0.1 single-user ownership, no organizations.
+	deps.Authz = authz.NewResolver(authz.NoRoles{})
 	switch {
 	case cfg.APIToken != "":
 		deps.Auth = api.NewSessionAuthenticator(authSvc, cfg.APIToken, localOperator)
@@ -167,6 +171,8 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 	domainService := &domains.Service{Store: domains.PGStore{DB: db}, Resolver: stdResolver{}}
 	deps.Domains = domainService
 	deps.Logs = logs.NewPGStore(db, 0)
+	// Audit trail (#128): privileged operation events, persisted redacted.
+	deps.Audit = audit.NewService(audit.NewPGStore(db))
 	deps.Plans = &planner.Service{Engine: planner.New(), Profiles: analysis.PGStore{DB: db}, Servers: deps.Servers, Domains: domainService, DB: db, NewID: deployment.NewID}
 	if cfg.GitHub.Enabled() {
 		key, err := secrets.ParseKey(cfg.SecretKey)

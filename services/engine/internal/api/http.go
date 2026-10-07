@@ -3,13 +3,15 @@ package api
 import (
 	"encoding/json"
 	"errors"
-	"github.com/digitaleflex/axiom/services/engine/internal/logs"
 	"io"
 	"log/slog"
 	"mime"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/digitaleflex/axiom/services/engine/internal/audit"
+	"github.com/digitaleflex/axiom/services/engine/internal/logs"
 )
 
 const maxBodyBytes = 1 << 20 // 1 MiB
@@ -115,14 +117,56 @@ func pageResponse[T any](items []T, p page, total int) map[string]any {
 	return map[string]any{"items": items, "page": p.Page, "limit": p.Limit, "total": total}
 }
 
-// audit records privileged operations: actor, action, target, result,
-// request ID and timestamp (structured log; queryable trail in #128).
-// Secrets must never appear in action or target strings.
-func (a *API) audit(r *http.Request, action, target string, err error) {
-	result := "ok"
+// audit records privileged operations through the audit service (#128):
+// actor, action, target, result, request ID, timestamp and the resource
+// owner (for owner-scoped reads). When no audit service is configured it
+// falls back to a structured log line. Secrets must never appear in action
+// or target strings; the audit service redacts every field before
+// persistence.
+func (a *API) audit(r *http.Request, action, target, ownerID string, err error) {
+	result := audit.ResultOK
 	if err != nil {
-		result = "error"
+		result = audit.ResultError
 	}
-	a.log.Info("audit", "requestId", requestID(r.Context()), "actor", principal(r.Context()).UserID,
-		"action", action, "target", target, "result", result)
+	p := principal(r.Context())
+	if a.auditSvc == nil {
+		a.log.Info("audit", "requestId", requestID(r.Context()), "actor", p.UserID,
+			"action", action, "target", target, "result", result)
+		return
+	}
+	// Audit persistence must never fail the request; log and continue.
+	if recErr := a.auditSvc.Record(r.Context(), audit.Event{
+		ActorID:    p.UserID,
+		ActorName:  p.Name,
+		Action:     action,
+		TargetType: auditTargetType(action),
+		TargetID:   target,
+		Result:     result,
+		RequestID:  requestID(r.Context()),
+		OwnerID:    ownerID,
+	}); recErr != nil {
+		a.log.Error("audit record failed", "requestId", requestID(r.Context()), "action", action, "error", logs.Redact(recErr.Error()))
+	}
+}
+
+// auditTargetType maps an action to its resource type for the audit trail.
+func auditTargetType(action string) string {
+	switch {
+	case strings.HasPrefix(action, "deployment."):
+		return "deployment"
+	case strings.HasPrefix(action, "plan."):
+		return "deployment_plan"
+	case strings.HasPrefix(action, "domain."):
+		return "domain"
+	case strings.HasPrefix(action, "server."):
+		return "server"
+	case strings.HasPrefix(action, "github."):
+		return "github_connection"
+	case strings.HasPrefix(action, "appconfig."):
+		return "config"
+	case strings.HasPrefix(action, "agent."):
+		return "agent"
+	default:
+		return "unknown"
+	}
 }

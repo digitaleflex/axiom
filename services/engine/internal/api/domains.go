@@ -3,10 +3,11 @@ package api
 import (
 	"context"
 	"errors"
-	"github.com/digitaleflex/axiom/services/engine/internal/logs"
 	"net/http"
 
+	"github.com/digitaleflex/axiom/services/engine/internal/authz"
 	"github.com/digitaleflex/axiom/services/engine/internal/domains"
+	"github.com/digitaleflex/axiom/services/engine/internal/logs"
 )
 
 // LogStore serves persisted deployment logs (#66).
@@ -40,6 +41,7 @@ func (a *API) withTarget(ctx context.Context, r domains.Record) domainDTO {
 
 // ownedDomain resolves a domain ID to its record after verifying the caller
 // owns the application. Foreign domains report as not found (no leak).
+// Ownership is resolved through authz (#127).
 func (a *API) ownedDomain(r *http.Request) (domains.Record, error) {
 	if a.domains == nil {
 		return domains.Record{}, errUnavailable
@@ -52,7 +54,10 @@ func (a *API) ownedDomain(r *http.Request) (domains.Record, error) {
 	if err != nil {
 		return domains.Record{}, err
 	}
-	if _, err := a.ownedApplication(r, rec.ApplicationID); err != nil {
+	rel, err := a.authz.Resolve(r.Context(), a.actorOf(r), authz.Resource{
+		Type: "application", ID: rec.ApplicationID, OwnerID: a.appOwnerID(r, rec.ApplicationID),
+	})
+	if err != nil || rel != authz.RelationshipOwner {
 		return domains.Record{}, errNotFound("domain", id)
 	}
 	return rec, nil
@@ -86,13 +91,19 @@ func (a *API) listDomains(w http.ResponseWriter, r *http.Request) error {
 
 func (a *API) addDomain(w http.ResponseWriter, r *http.Request) (err error) {
 	target := r.PathValue("applicationID")
-	defer func() { a.audit(r, "domain.add", target, err) }()
+	defer func() { a.audit(r, "domain.add", target, principal(r.Context()).UserID, err) }()
 	if a.domains == nil {
 		return errUnavailable
 	}
 	app, err := a.ownedApplication(r, r.PathValue("applicationID"))
 	if err != nil {
 		return err
+	}
+	// authz defense-in-depth: the caller must own the application.
+	if ok, _ := a.authorize(r, authz.ActionDomainWrite, authz.Resource{
+		Type: "application", ID: app.ID, OwnerID: app.OwnerID,
+	}); !ok {
+		return errNotFound("application", app.ID)
 	}
 	var in struct {
 		Hostname    string `json:"hostname"`
@@ -121,10 +132,16 @@ func (a *API) addDomain(w http.ResponseWriter, r *http.Request) (err error) {
 
 func (a *API) removeDomain(w http.ResponseWriter, r *http.Request) (err error) {
 	target := r.PathValue("domainID")
-	defer func() { a.audit(r, "domain.remove", target, err) }()
+	defer func() { a.audit(r, "domain.remove", target, principal(r.Context()).UserID, err) }()
 	rec, err := a.ownedDomain(r)
 	if err != nil {
 		return err
+	}
+	// authz defense-in-depth: the caller must own the domain's application.
+	if ok, _ := a.authorize(r, authz.ActionDomainWrite, authz.Resource{
+		Type: "application", ID: rec.ApplicationID, OwnerID: a.appOwnerID(r, rec.ApplicationID),
+	}); !ok {
+		return errNotFound("domain", rec.ID)
 	}
 	if err := a.domains.Remove(r.Context(), rec.ApplicationID, rec.ID); err != nil {
 		return err
@@ -135,10 +152,16 @@ func (a *API) removeDomain(w http.ResponseWriter, r *http.Request) (err error) {
 
 func (a *API) setPrimaryDomain(w http.ResponseWriter, r *http.Request) (err error) {
 	target := r.PathValue("domainID")
-	defer func() { a.audit(r, "domain.set_primary", target, err) }()
+	defer func() { a.audit(r, "domain.set_primary", target, principal(r.Context()).UserID, err) }()
 	rec, err := a.ownedDomain(r)
 	if err != nil {
 		return err
+	}
+	// authz defense-in-depth: the caller must own the domain's application.
+	if ok, _ := a.authorize(r, authz.ActionDomainWrite, authz.Resource{
+		Type: "application", ID: rec.ApplicationID, OwnerID: a.appOwnerID(r, rec.ApplicationID),
+	}); !ok {
+		return errNotFound("domain", rec.ID)
 	}
 	updated, err := a.domains.SetPrimary(r.Context(), rec.ApplicationID, rec.ID)
 	if err != nil {
@@ -152,6 +175,12 @@ func (a *API) checkDomain(w http.ResponseWriter, r *http.Request) error {
 	rec, err := a.ownedDomain(r)
 	if err != nil {
 		return err
+	}
+	// authz defense-in-depth: the caller must own the domain's application.
+	if ok, _ := a.authorize(r, authz.ActionDomainWrite, authz.Resource{
+		Type: "application", ID: rec.ApplicationID, OwnerID: a.appOwnerID(r, rec.ApplicationID),
+	}); !ok {
+		return errNotFound("domain", rec.ID)
 	}
 	checked, err := a.domains.CheckDNS(r.Context(), rec.ApplicationID, rec.ID)
 	if err != nil {

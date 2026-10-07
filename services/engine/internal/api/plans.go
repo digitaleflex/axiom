@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/digitaleflex/axiom/services/engine/internal/authz"
 	"github.com/digitaleflex/axiom/services/engine/internal/domains"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner/validation"
@@ -18,13 +19,19 @@ type Plans interface {
 
 func (a *API) createPlan(w http.ResponseWriter, r *http.Request) (err error) {
 	target := r.PathValue("applicationID")
-	defer func() { a.audit(r, "plan.create", target, err) }()
+	defer func() { a.audit(r, "plan.create", target, principal(r.Context()).UserID, err) }()
 	if a.plans == nil {
 		return errUnavailable
 	}
 	app, err := a.ownedApplication(r, r.PathValue("applicationID"))
 	if err != nil {
 		return err
+	}
+	// authz defense-in-depth: the caller must own the application.
+	if ok, _ := a.authorize(r, authz.ActionDeploymentCreate, authz.Resource{
+		Type: "application", ID: app.ID, OwnerID: app.OwnerID,
+	}); !ok {
+		return errNotFound("application", app.ID)
 	}
 	var in struct {
 		ServerID    string `json:"serverId"`
