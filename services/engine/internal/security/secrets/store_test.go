@@ -94,12 +94,17 @@ func TestCiphertextContainsNoPlaintext(t *testing.T) {
 }
 
 func TestAADBindingWrongScopeFails(t *testing.T) {
-	store, _, ctx := newTestStore(t)
+	store, db, ctx := newTestStore(t)
 	if err := store.Put(ctx, "application:app_1", "TOKEN", "gho_secret"); err != nil {
 		t.Fatal(err)
 	}
+	// Simulate a ciphertext swap: move the row to another scope without
+	// resealing. The AAD binding must make decryption fail.
+	if _, err := db.ExecContext(ctx, `UPDATE secrets SET scope = 'application:app_2' WHERE scope = 'application:app_1'`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.Get(ctx, "application:app_2", "TOKEN"); !errors.Is(err, ErrDecrypt) {
-		t.Fatalf("wrong scope must fail with ErrDecrypt, got %v", err)
+		t.Fatalf("swapped ciphertext must fail with ErrDecrypt, got %v", err)
 	}
 	if _, err := store.Get(ctx, "application:app_1", "OTHER"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing name must fail with ErrNotFound, got %v", err)
@@ -223,7 +228,7 @@ func TestErrorsNeverContainPlaintext(t *testing.T) {
 	}
 
 	// A decrypt failure never contains the plaintext.
-	store, _, ctx := newTestStore(t)
+	store, _, _ := newTestStore(t)
 	sealed, _ := store.Box.Seal([]byte("gho_distinctive_plaintext"), []byte("application:app_1/WRONG"))
 	_, err = store.Box.Open(sealed, []byte("application:app_1/TOKEN"))
 	if !errors.Is(err, ErrDecrypt) {
