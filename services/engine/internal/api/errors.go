@@ -7,6 +7,7 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 	ghauth "github.com/digitaleflex/axiom/services/engine/internal/github/auth"
 	"github.com/digitaleflex/axiom/services/engine/internal/github/repos"
+	"github.com/digitaleflex/axiom/services/engine/internal/server"
 )
 
 // Canonical error codes (docs/architecture/api-contract.md §18).
@@ -61,6 +62,9 @@ func fromDomain(err error) *Error {
 	switch {
 	case errors.As(err, &apiErr):
 		return apiErr
+	case isPlanErr(err):
+		e, _ := planError(err)
+		return e
 	case isAnalysisErr(err):
 		e, _ := analysisError(err)
 		return e
@@ -88,6 +92,8 @@ func fromDomain(err error) *Error {
 		return newError(http.StatusTooManyRequests, CodeRateLimited, "GitHub rate limit reached; retry later", nil)
 	case errors.Is(err, repos.ErrUnavailable), errors.Is(err, ghauth.ErrProvider):
 		return newError(http.StatusServiceUnavailable, CodeServiceUnavailable, "GitHub is unavailable; retry later", nil)
+	case errors.Is(err, server.ErrNotFound):
+		return newError(http.StatusNotFound, CodeNotFound, "server not found", nil)
 	case errors.Is(err, deployment.ErrInvalidInput):
 		return newError(http.StatusBadRequest, CodeInvalidRequest, err.Error(), nil)
 	default:
@@ -96,3 +102,5 @@ func fromDomain(err error) *Error {
 }
 
 func isAnalysisErr(err error) bool { _, ok := analysisError(err); return ok }
+
+func isPlanErr(err error) bool { _, ok := planError(err); return ok }

@@ -31,6 +31,7 @@ type Deps struct {
 	GitHub       GitHubConnections
 	Repositories RepositoryDiscovery
 	Analyses     Analyses
+	Plans        Plans
 	// ConsoleURL is where the GitHub callback redirects the browser.
 	ConsoleURL string
 	// SecureCookies sets the Secure attribute on cookies (production).
@@ -47,6 +48,7 @@ type API struct {
 	github       GitHubConnections
 	repos        RepositoryDiscovery
 	analyses     Analyses
+	plans        Plans
 	consoleURL   string
 	secure       bool
 	mux          *http.ServeMux
@@ -57,7 +59,7 @@ type API struct {
 func New(d Deps) http.Handler {
 	a := &API{
 		log: d.Log, auth: d.Auth, deployments: d.Deployments,
-		applications: d.Applications, servers: d.Servers, github: d.GitHub, repos: d.Repositories, analyses: d.Analyses,
+		applications: d.Applications, servers: d.Servers, github: d.GitHub, repos: d.Repositories, analyses: d.Analyses, plans: d.Plans,
 		consoleURL: d.ConsoleURL, secure: d.SecureCookies, mux: http.NewServeMux(),
 	}
 	if a.log == nil {
@@ -87,6 +89,9 @@ func New(d Deps) http.Handler {
 	r.HandleFunc("GET /api/v1/applications/{applicationID}/analysis/{analysisID}", a.wrap(a.getAnalysis))
 	r.HandleFunc("GET /api/v1/applications/{applicationID}/profile", a.wrap(a.getProfile))
 	r.HandleFunc("PUT /api/v1/applications/{applicationID}/profile/overrides", a.wrap(a.putOverrides))
+
+	r.HandleFunc("POST /api/v1/applications/{applicationID}/deployment-plans", a.wrap(a.createPlan))
+	r.HandleFunc("GET /api/v1/deployment-plans/{planID}", a.wrap(a.getPlan))
 
 	r.HandleFunc("GET /api/v1/servers", a.wrap(a.listServers))
 	r.HandleFunc("GET /api/v1/servers/{serverID}", a.wrap(a.getServer))
