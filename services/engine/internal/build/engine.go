@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/build/workspace"
+	"github.com/digitaleflex/axiom/services/engine/internal/logs"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner"
 )
 
@@ -104,7 +105,11 @@ type Engine struct {
 	Workspaces *workspace.Manager
 	Builder    ImageBuilder
 	Log        Logger
-	Now        func() time.Time
+	// LogStore optionally persists build log events (issue #66): source
+	// checkout, Dockerfile choice and the builder output tail, always with
+	// step BUILD and source build. Nil disables persistence.
+	LogStore logs.Appender
+	Now      func() time.Time
 }
 
 var shaRe = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -139,16 +144,19 @@ func (e *Engine) Build(ctx context.Context, in Input) (Result, error) {
 	e.log(ctx, in.DeploymentID, "INFO", "fetching source at "+in.Commit[:7])
 	rc, err := in.Source.Archive(ctx)
 	if err != nil {
+		e.log(ctx, in.DeploymentID, "ERROR", "fetch source archive: "+err.Error())
 		return Result{}, &Error{Code: CodeSourceFailed, Message: "fetch source archive", Cause: err}
 	}
 	_, err = ws.ExtractTarGz(ctx, rc, workspace.DefaultLimits)
 	_ = rc.Close()
 	if err != nil {
+		e.log(ctx, in.DeploymentID, "ERROR", "extract source archive: "+err.Error())
 		return Result{}, wrapSourceError(err)
 	}
 
 	dockerfile, generated, err := e.resolveDockerfile(ws.Dir, in.Plan)
 	if err != nil {
+		e.log(ctx, in.DeploymentID, "ERROR", err.Error())
 		return Result{}, err
 	}
 	e.log(ctx, in.DeploymentID, "INFO", describeDockerfile(dockerfile, generated))
@@ -168,10 +176,13 @@ func (e *Engine) Build(ctx context.Context, in Input) (Result, error) {
 	if err != nil {
 		var be *Error
 		if errors.As(err, &be) {
+			e.persistOutput(ctx, in.DeploymentID, logs.LevelError, be.Log)
 			return Result{}, be
 		}
+		e.log(ctx, in.DeploymentID, "ERROR", "image build failed: "+err.Error())
 		return Result{}, &Error{Code: CodeBuildFailed, Message: "image build failed", Cause: err}
 	}
+	e.persistOutput(ctx, in.DeploymentID, logs.LevelInfo, res.Log)
 	duration := res.DurationMs
 	if duration == 0 {
 		duration = e.now().Sub(start).Milliseconds()
@@ -185,6 +196,22 @@ func (e *Engine) Build(ctx context.Context, in Input) (Result, error) {
 	}
 	e.log(ctx, in.DeploymentID, "INFO", "built "+tag+" ("+shortDigest(res.ImageID)+")")
 	return Result{ImageRef: tag, ArtifactID: "artifact:" + tag, Artifact: artifact}, nil
+}
+
+// persistOutput stores the bounded builder output tail in the log store
+// (issue #66): INFO on success, ERROR on failure, always step BUILD and source
+// build. It bypasses Logger so the in-process event stream is unchanged.
+func (e *Engine) persistOutput(ctx context.Context, deploymentID string, level logs.Level, tail string) {
+	if e.LogStore == nil || tail == "" {
+		return
+	}
+	_ = e.LogStore.Append(ctx, logs.Entry{
+		DeploymentID: deploymentID,
+		Level:        level,
+		Step:         logs.StepBuild,
+		Source:       logs.SourceBuild,
+		Message:      "build output tail:\n" + tail,
+	})
 }
 
 // resolveDockerfile returns the Dockerfile path relative to the workspace.
@@ -226,9 +253,22 @@ func wrapSourceError(err error) *Error {
 	}
 }
 
+// log emits a build lifecycle event to the in-process Logger and, when
+// configured, persists it to the durable log store (issue #66). Build levels
+// are INFO | ERROR and map directly onto logs levels; step is always BUILD
+// and source is always build.
 func (e *Engine) log(ctx context.Context, deploymentID, level, msg string) {
 	if e.Log != nil {
 		e.Log.Log(ctx, LogEvent{DeploymentID: deploymentID, Level: level, Step: "BUILD", Message: msg})
+	}
+	if e.LogStore != nil {
+		_ = e.LogStore.Append(ctx, logs.Entry{
+			DeploymentID: deploymentID,
+			Level:        logs.Level(level),
+			Step:         logs.StepBuild,
+			Source:       logs.SourceBuild,
+			Message:      msg,
+		})
 	}
 }
 
