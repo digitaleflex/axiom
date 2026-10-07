@@ -22,3 +22,7 @@ quality_gates:
 escalation:
   - {when: "policy exception requested", to: human-approval}
 implementation: {kind: code, deterministic: true, provider_coupling: none}
+context:
+  scopes: [plan, manifest, configuration.names, policy, events]
+  ttl_seconds: 600
+runtime_limits: {max_execution_seconds: 30, max_retries: 0, network_access: none}

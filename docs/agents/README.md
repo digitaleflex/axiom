@@ -1,5 +1,10 @@
 # Axiom Agent Operating System
 
+> Two distinct systems live under `docs/agents/`:
+>
+> 1. **Deployment Expert Framework** — bounded experts invoked at runtime by the Deployment Engine (Repository Analyzer, Stack Detector, Planner, Build, Runtime, Infrastructure, Security). See [`deployment/`](deployment/README.md) and [`specs/deployment/`](specs/deployment/README.md). Issues #15, #34–#39.
+> 2. **Engineering agent operating system** — how coding agents develop Axiom through issues and PRs (this page and the documents below).
+
 Axiom uses specialized expert roles plus GitHub Copilot custom agents to execute bounded engineering work through issues and pull requests.
 
 ## Core documents

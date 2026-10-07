@@ -1,0 +1,88 @@
+# Axiom deployment expert tool catalog (issue #37).
+# Every tool referenced by schemas/experts/*.yaml must be declared here.
+# Spec: docs/agents/deployment/tools.md
+version: 1
+tools:
+  repository.read:
+    description: Read files of a pinned repository snapshot (no execution).
+    category: repository
+    sensitivity: normal
+    destructive: false
+    approval: none
+    audited: false
+  github.api.read:
+    description: Read repository metadata, refs and commits through the GitHub connection.
+    category: repository
+    sensitivity: controlled
+    destructive: false
+    approval: none
+    audited: true
+  profile.read:
+    description: Read a valid ApplicationProfile artifact.
+    category: artifact
+    sensitivity: normal
+    destructive: false
+    approval: none
+    audited: false
+  preset.resolve:
+    description: Resolve a profile to a V0.1 build/runtime preset.
+    category: artifact
+    sensitivity: normal
+    destructive: false
+    approval: none
+    audited: false
+  server.read:
+    description: Read server profile, capabilities and liveness.
+    category: infrastructure
+    sensitivity: normal
+    destructive: false
+    approval: none
+    audited: false
+  plan.validate:
+    description: Validate a plan against schema, capabilities and determinism rules.
+    category: artifact
+    sensitivity: normal
+    destructive: false
+    approval: none
+    audited: false
+  build.workspace:
+    description: Create an isolated, ephemeral build workspace with a checkout of the pinned commit.
+    category: execution
+    sensitivity: controlled
+    destructive: false
+    approval: none
+    audited: true
+  image.build:
+    description: Build an image from the workspace using preset-validated commands only.
+    category: execution
+    sensitivity: controlled
+    destructive: false
+    approval: none
+    audited: true
+  agent.dispatch:
+    description: Dispatch a typed Runtime Agent operation (CREATE_RUNTIME, NETWORK, START, VERIFY, STOP, REMOVE). No shell.
+    category: infrastructure
+    sensitivity: privileged
+    destructive: conditional
+    approval: destructive-operations
+    audited: true
+  secret.reference:
+    description: Pass secret references to an execution boundary for injection; never returns values.
+    category: secrets
+    sensitivity: privileged
+    destructive: false
+    approval: none
+    audited: true
+  policy.evaluate:
+    description: Evaluate a plan or operation against security policy.
+    category: security
+    sensitivity: normal
+    destructive: false
+    approval: none
+    audited: true
+forbidden_everywhere:
+  - arbitrary shell or command execution outside image.build preset commands
+  - reading secret values
+  - host filesystem access outside the build workspace
+  - Docker or Traefik API access except through agent.dispatch
+  - unrestricted network access

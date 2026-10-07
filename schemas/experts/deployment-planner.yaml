@@ -24,3 +24,7 @@ quality_gates:
 escalation:
   - {when: "no eligible server", to: user}
 implementation: {kind: code, deterministic: true, provider_coupling: none}
+context:
+  scopes: [profile, server.profile, configuration.names, policy]
+  ttl_seconds: 900
+runtime_limits: {max_execution_seconds: 30, max_retries: 0, network_access: none}

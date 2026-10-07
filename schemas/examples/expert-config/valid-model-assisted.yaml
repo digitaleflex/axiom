@@ -1,0 +1,10 @@
+config_version: "1"
+expert_id: security-expert
+contract_version: "1"
+enabled: false
+implementation:
+  kind: model-assisted
+  provider: example-provider
+  model: example-model
+  credentials_ref: secret://experts/security/provider
+overrides: {max_execution_seconds: 20, human_review: true}

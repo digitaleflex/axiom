@@ -21,3 +21,8 @@ quality_gates:
 escalation:
   - {when: "build command fails", to: engine}
 implementation: {kind: code, deterministic: true, provider_coupling: none}
+context:
+  scopes: [plan, repository.snapshot, configuration.names]
+  sensitive: [secret.references, github.token]
+  ttl_seconds: 3600
+runtime_limits: {max_execution_seconds: 1800, max_retries: 1, network_access: registry}

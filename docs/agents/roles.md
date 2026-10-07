@@ -1,5 +1,7 @@
 # Axiom Expert Roles
 
+> Engineering roles for developing Axiom. Runtime deployment experts are defined separately in [`deployment/roles.md`](deployment/roles.md).
+
 Axiom combines domain experts with GitHub custom agents. The role defines responsibility; the GitHub agent profile defines how that role is executed.
 
 | Role | Primary responsibility | Typical GitHub agent |

@@ -24,3 +24,7 @@ quality_gates:
 escalation:
   - {when: "snapshot unreadable or ref missing", to: engine}
 implementation: {kind: code, deterministic: true, provider_coupling: none}
+context:
+  scopes: [repository.snapshot, repository.metadata, manifest]
+  ttl_seconds: 900
+runtime_limits: {max_execution_seconds: 120, max_retries: 1, network_access: none}

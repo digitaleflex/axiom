@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://axiom.dev/schemas/expert-config.schema.json",
+  "title": "Axiom Deployment Expert Configuration",
+  "description": "Binds an expert contract to an implementation and registers it (issue #35). Provider/model settings live here, never in the contract. Secrets only as references.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["config_version", "expert_id", "contract_version", "enabled", "implementation"],
+  "properties": {
+    "config_version": {"const": "1"},
+    "expert_id": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+    "contract_version": {"const": "1"},
+    "enabled": {"type": "boolean"},
+    "implementation": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "adapter"],
+          "properties": {
+            "kind": {"const": "code"},
+            "adapter": {"type": "string", "description": "Go adapter identifier registered in the Engine", "pattern": "^[a-z][a-z0-9_.]*$"},
+            "version": {"type": "string"}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "provider", "model", "credentials_ref"],
+          "properties": {
+            "kind": {"const": "model-assisted"},
+            "provider": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+            "model": {"type": "string"},
+            "credentials_ref": {"type": "string", "pattern": "^secret://[a-z0-9/_-]+$", "description": "Reference only; values are never embedded"},
+            "temperature": {"type": "number", "minimum": 0, "maximum": 1},
+            "max_tokens": {"type": "integer", "minimum": 1}
+          }
+        }
+      ]
+    },
+    "overrides": {
+      "type": "object", "additionalProperties": false,
+      "description": "May only tighten contract limits, never widen them.",
+      "properties": {
+        "max_execution_seconds": {"type": "integer", "minimum": 1},
+        "max_retries": {"type": "integer", "minimum": 0},
+        "human_review": {"type": "boolean"}
+      }
+    }
+  }
+}

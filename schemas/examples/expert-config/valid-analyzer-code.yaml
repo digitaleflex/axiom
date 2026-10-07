@@ -1,0 +1,5 @@
+config_version: "1"
+expert_id: repository-analyzer
+contract_version: "1"
+enabled: true
+implementation: {kind: code, adapter: engine.analyzer, version: "0.1.0"}

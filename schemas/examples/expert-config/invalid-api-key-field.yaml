@@ -1,0 +1,6 @@
+# expected invalid: unknown field api_key
+config_version: "1"
+expert_id: build-expert
+contract_version: "1"
+enabled: true
+implementation: {kind: code, adapter: engine.build, api_key: abc}
