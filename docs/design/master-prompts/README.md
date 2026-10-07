@@ -1,5 +1,7 @@
 # Axiom Design Master Prompts
 
+> **Non-normative.** These prompts generate explorations. The validated source of truth is `docs/design/**` (entry point: `docs/design/handoff/README.md`). For V2 generation use `docs/design/explorations/stitch/v2/README.md`, which supersedes the visual sections of these prompts where they conflict.
+
 This directory contains the canonical prompts used to produce Axiom's UI/UX design deliverables one stage at a time.
 
 ## Workflow

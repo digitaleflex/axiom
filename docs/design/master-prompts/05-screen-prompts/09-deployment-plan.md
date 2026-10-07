@@ -10,6 +10,6 @@ Keep Axiom's global shell and semantic status system coherent: Emerald=Live, Amb
 
 
 ### Deployment Plan
-Deterministic execution plan: Analyze, Prepare, Build Image, Create Runtime, Configure Network, Start, Verify. Show Docker, Traefik, domain/TLS, health policy and rollback. Primary Deploy action.
+Deterministic execution plan rendered from the planner contract: Analyze shown as a completed precondition, then exactly Build, Create Runtime, Configure Network, Start, Verify. Plan summary with domain/TLS, health policy and rollback boundary; infrastructure detail (container runtime, routing) only in expandable technical sections. Primary Deploy action. Spec: docs/design/screens/deployment-plan/README.md.
 
 Render the screen now. The primary output must be the visual UI, not prose.

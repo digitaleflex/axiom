@@ -10,6 +10,6 @@ Keep Axiom's global shell and semantic status system coherent: Emerald=Live, Amb
 
 
 ### Deployment Progress
-Live deployment: dominant pipeline, completed/current/pending steps, elapsed time, live events/logs, current state, runtime details when available and always-accessible Abort control.
+Live deployment: dominant pipeline, completed/current/pending steps, elapsed time, live events/logs, current state, runtime details when available and Cancel control only while the Engine permits cancellation. Spec: docs/design/screens/deployment-progress/README.md.
 
 Render the screen now. The primary output must be the visual UI, not prose.

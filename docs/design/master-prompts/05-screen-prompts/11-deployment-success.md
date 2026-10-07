@@ -10,6 +10,6 @@ Keep Axiom's global shell and semantic status system coherent: Emerald=Live, Amb
 
 
 ### Deployment Success
-Successful deployment: LIVE status, production URL, deployment duration, commit SHA, runtime/container identity, health result, server and key steps. Actions: Open Application, Logs, Rollback.
+Successful deployment: LIVE status, production URL, deployment duration, commit SHA, runtime/container identity, health result, server and key steps. Actions: Open Application, Logs; Rollback only when supported by the API contract. Spec: docs/design/screens/deployment-success/README.md.
 
 Render the screen now. The primary output must be the visual UI, not prose.

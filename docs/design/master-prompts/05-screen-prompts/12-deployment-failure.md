@@ -10,6 +10,6 @@ Keep Axiom's global shell and semantic status system coherent: Emerald=Live, Amb
 
 
 ### Deployment Failure
-Failed deployment: exact failing step, actionable error, exit code when available, relevant logs, timestamp, deployment ID and safe Retry/Logs/Configuration/Rollback actions. No generic failure banner.
+Failed deployment: exact failing step, actionable error, exit code when available, relevant logs, timestamp, deployment ID and safe Retry/Logs/Configuration actions (Rollback only when supported by the API contract). Spec: docs/design/screens/deployment-failure/README.md. No generic failure banner.
 
 Render the screen now. The primary output must be the visual UI, not prose.
