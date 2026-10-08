@@ -127,27 +127,55 @@ https://app.example.com
 
 ## Architecture status
 
-The repository is currently in the **foundation and persistence phase**.
+The repository is past the foundation phase: analysis, profiling, planning and deployment state are implemented and wired into the running Engine. Execution is not.
 
-### Implemented foundation
+At `main` = `d4dc7ce`:
 
-- Go Engine bootstrap
-- Configuration loading
-- Structured logging with `slog`
-- HTTP server foundation
-- Health and readiness endpoints
-- PostgreSQL connection layer
-- PostgreSQL connection pooling configuration
-- Migration runner
-- Initial relational schema
-- Repository/persistence layer
-- Transaction helper
-- PostgreSQL integration-test suite
-- Local PostgreSQL development environment
+- All three Go services (`engine`, `agent`, `orchestrator`) compile, `go vet` is clean, and the Go suite reports **564 passing tests, 0 failures, 2 skips** (`TestRealDockerBuild`, `TestGitHubToLive`) against PostgreSQL 16.
+- The Cloud Console typechecks and builds (`tsc --noEmit && vite build`), but its test suite is **not green**: `vitest run` reports **31 passed / 9 failed**. These fragile tests were committed as-is in `471bebf`.
+- No CI workflow runs the frontend, so that breakage is not caught automatically. `.github/workflows/` covers Go tests, schema contracts and agent readiness only.
+
+### Wired in production
+
+Constructed by the Engine composition root (`services/engine/internal/bootstrap/bootstrap.go`) and reachable over the HTTP API:
+
+- Repository analysis and stack detection (`internal/analysis`, `internal/analyzer`)
+- Application profile and runtime presets (`internal/profile`, `internal/runtime/presets`)
+- Deployment plan generation (`internal/planner`)
+- Deployment state, event bus and logs (`internal/deployment`, `internal/logs`)
+- Servers, domains, GitHub connection, user authentication, authorization, audit, secrets (`internal/server`, `internal/domains`, `internal/github`, `internal/auth`, `internal/authz`, `internal/audit`, `internal/security/secrets`)
+- Agent credentials on the Engine side (`internal/agentauth`)
+- Metrics registry and SSE deployment event stream (`internal/observability/metrics`, `internal/api/sse`)
+- PostgreSQL migrations 001-013 (`services/engine/migrations`)
+
+### Delivered but not reachable: the build/executor breakpoint
+
+`build.Engine` (`services/engine/internal/build`) and `executor.Runner` (`services/engine/internal/executor`) exist and are unit-tested, but **`bootstrap.New` never constructs them**. As a direct consequence:
+
+- image build, runtime start, Traefik/networking, health check and domain/SSL are not reachable from a running Engine;
+- a deployment created through the API stays `PENDING` — it never reaches `LIVE` or `FAILED`;
+- the SSE stream exists but carries no execution events.
+
+The same breakpoint exists on the agent side. `services/agent/cmd/agent/main.go:21` instantiates only `agent.NewRuntime`, and `agent.Run` does nothing but log every 30 seconds. The M5 agent packages (`identity`, `heartbeat`, `dispatcher`, `state`, `recovery`, `docker`, `traefik`, `health`, `logs`, `capabilities`, `protocol`, `ownership`, `auth`) are delivered and tested but **never mounted in the agent binary**. The repository already states this in `docs/architecture/agent-failure-matrix.md:91-96`.
+
+There is also no Engine-to-Agent HTTP client, so Engine and Agent cannot talk to each other.
+
+Two further packages are delivered and tested but **not adopted by production code**:
+
+- `internal/observability/logging` — the correlation and redaction helpers have **zero production imports**. The Engine logs through plain `internal/logger` (bare `slog`), so no correlation ID reaches the application logs.
+- `internal/runtime/presets/docker` — the generic Docker preset is never invoked by analysis, profile or build. A project shipping a valid `Dockerfile` does not get the intended preset validation.
+- `services/agent/internal/metrics` — the registry is correct, but the agent exposes no HTTP endpoint, so agent metrics are never scraped.
+
+In short: **analysis -> profile -> plan -> deployment record works and is live; execution does not.** Do not read the shipped agent and build packages as an operational runtime.
+
+### Not present in the repository
+
+- Deployment diagnostics API (#102)
+- Axiom CLI (#105, #106)
+- V0.1 end-to-end and security/failure release gates (#110, #111)
+- Release evidence documentation (#112)
 
 ### Persistence model currently implemented
-
-The current V0.1 persistence foundation contains:
 
 ```text
 User
@@ -158,44 +186,48 @@ User
                      └── Server
 ```
 
-The persistence layer is intentionally being expanded incrementally. The complete deployment domain still needs additional entities such as environments, deployment steps, domains, logs and agent-related state.
+Migrations 001-013 add sessions, secrets, audit and deployment logs/correlation on top of that chain. The deployment domain still lacks additional entities such as environments and deployment steps.
 
 ## Repository structure
 
 ```text
 axiom/
+├── apps/
+│   └── cloud/                  # React + Vite console (src/, vite.config.ts)
+│
 ├── docs/
-│   ├── product/
-│   ├── architecture/
+│   ├── adr/
 │   ├── agents/
+│   ├── architecture/
+│   ├── design/
+│   ├── operations/
 │   ├── orchestrator/
-│   └── adr/
+│   ├── product/
+│   ├── roadmap/
+│   └── security/
 │
 ├── schemas/
+│   ├── examples/
+│   ├── experts/
 │   ├── axiom.yaml
 │   ├── agent.yaml
 │   ├── artifact.yaml
-│   └── task.yaml
+│   ├── task.yaml
+│   └── *.schema.json
 │
 ├── services/
-│   └── engine/
-│       ├── cmd/
-│       │   └── engine/
-│       │       └── main.go
-│       ├── internal/
-│       │   ├── config/
-│       │   ├── database/
-│       │   ├── httpserver/
-│       │   └── logger/
-│       ├── migrations/
-│       ├── go.mod
-│       └── README.md
+│   ├── engine/                 # cmd/engine, internal/*, migrations/, docker-compose.dev.yml
+│   ├── agent/                  # cmd/agent, internal/*, tests/
+│   └── orchestrator/           # cmd/orchestrator, internal/* (framework, see ADR-0010)
 │
-└── tests/
-    ├── contracts/
-    ├── agents/
-    ├── integration/
-    └── e2e/
+├── tests/
+│   ├── agents/
+│   ├── contracts/
+│   ├── e2e/
+│   ├── integration/
+│   └── orchestrator/
+│
+└── .github/workflows/          # Go tests, schema contracts, agent readiness
 ```
 
 ## Technology direction
@@ -242,7 +274,7 @@ The planned platform includes:
 From the repository root:
 
 ```bash
-docker compose -f infra/docker-compose.dev.yml up -d postgres
+docker compose -f services/engine/docker-compose.dev.yml up -d postgres
 ```
 
 The development database is exposed locally on port `5432`.
@@ -345,9 +377,9 @@ GitHub → LIVE
 
 ## Project status
 
-**Current phase:** Foundation → Persistence → API
+**Current phase:** M6/M7/M8 delivery — the code is largely landed, the execution path is not yet wired.
 
-**Current focus:** complete the authoritative PostgreSQL domain model, validate persistence with a real PostgreSQL environment, then expose the platform through the REST API and WebSocket layer.
+**Current focus:** close the build/executor breakpoint (`build.Engine` and `executor.Runner` are not constructed by the Engine bootstrap) and the agent wiring breakpoint (the M5 packages are not mounted in the agent binary), so that a deployment created through the API can actually reach `LIVE`. The Go suite is green; the Cloud Console test suite is not (31 passed / 9 failed) and is not covered by CI.
 
 Axiom's first meaningful milestone is not a generic AI demonstration. It is a reliable deployment path:
 
