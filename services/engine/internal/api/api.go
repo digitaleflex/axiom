@@ -65,6 +65,14 @@ type Deps struct {
 	// Audit records privileged operation events (#128). A nil service
 	// falls back to structured log lines only.
 	Audit AuditService
+	// Runner starts the background execution of a deployment (#100). A nil
+	// runner makes POST /applications/{id}/deployments persist the record and
+	// leave it PENDING, which is only correct for a deliberately
+	// execution-less Engine (tests, read-only tooling).
+	Runner DeploymentRunner
+	// Sources streams the archive of the commit a deployment builds (#98).
+	// Without it a triggered execution fails at the build step.
+	Sources SourceFetcher
 	// ConsoleURL is where the GitHub callback redirects the browser.
 	ConsoleURL string
 	// SecureCookies sets the Secure attribute on cookies (production).
@@ -89,6 +97,8 @@ type API struct {
 	logs         LogStore
 	appConfig    AppConfig
 	agents       *agentauth.Service
+	runner       DeploymentRunner
+	sources      SourceFetcher
 	consoleURL   string
 	secure       bool
 	mux          *http.ServeMux
@@ -101,6 +111,8 @@ func New(d Deps) http.Handler {
 		log: d.Log, auth: d.Auth, authSvc: d.Sessions, authz: d.Authz, auditSvc: d.Audit, deployments: d.Deployments,
 		applications: d.Applications, servers: d.Servers, github: d.GitHub, repos: d.Repositories, analyses: d.Analyses, plans: d.Plans, domains: d.Domains, logs: d.Logs, appConfig: d.AppConfig,
 		agents:     d.Agents,
+		runner:     d.Runner,
+		sources:    d.Sources,
 		consoleURL: d.ConsoleURL, secure: d.SecureCookies, mux: http.NewServeMux(),
 	}
 	if a.log == nil {

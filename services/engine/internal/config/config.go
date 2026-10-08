@@ -48,6 +48,9 @@ type Config struct {
 	// to true in production.
 	CookieSecure bool
 	GitHub       GitHubConfig
+	// Docker configures the image builder used by the deployment build stage
+	// (issue #100). Binary empty means "docker" resolved from PATH.
+	Docker DockerConfig
 	// ConsoleURL is where browser flows (GitHub callback) return to.
 	ConsoleURL string
 }
@@ -66,6 +69,12 @@ type GitHubConfig struct {
 
 // Enabled reports whether the GitHub connection flow is configured.
 func (g GitHubConfig) Enabled() bool { return g.ClientID != "" }
+
+// DockerConfig locates the container CLI the build stage invokes. The builder
+// passes every value as argv and never through a shell.
+type DockerConfig struct {
+	Binary string
+}
 
 type DatabaseConfig struct {
 	URL             string
@@ -108,6 +117,9 @@ func LoadFrom(lookup func(string) (string, bool)) (Config, error) {
 		APIURL:       strings.TrimRight(r.str("AXIOM_GITHUB_API_URL", "https://api.github.com"), "/"),
 		Scopes:       r.str("AXIOM_GITHUB_SCOPES", ""),
 	}
+	// The build stage invokes the container CLI with fixed flags and argv
+	// only; the binary is configurable for hosts where it is not on PATH.
+	cfg.Docker = DockerConfig{Binary: r.str("AXIOM_DOCKER_BINARY", "docker")}
 	// Production always requires the database; elsewhere it is opt-in.
 	cfg.Database.Required = r.bool("AXIOM_DB_REQUIRED", cfg.Env == EnvProduction)
 

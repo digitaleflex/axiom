@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/config"
+	"github.com/digitaleflex/axiom/services/engine/internal/executor"
 	"github.com/digitaleflex/axiom/services/engine/internal/logger"
 )
 
@@ -182,6 +183,20 @@ func TestWithDatabase(t *testing.T) {
 	code, got := call("GET", "/api/v1/deployments/"+dep["id"].(string)+"/steps", "", nil)
 	if code != 200 || len(got["items"].([]any)) != 2 {
 		t.Fatalf("steps = %d %v", code, got)
+	}
+	// The composition root must wire the deployment execution pipeline (#100):
+	// before this, createDeployment left every deployment PENDING forever.
+	if app.Runner() == nil {
+		t.Fatal("bootstrap must wire the deployment execution runner")
+	}
+	// It is a real, drainable runner: shutdown closes it to new executions.
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 2*time.Second)
+	if err := app.Runner().Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("runner shutdown: %v", err)
+	}
+	cancelShutdown()
+	if err := app.Runner().Start(context.Background(), executor.Request{DeploymentID: "dep_" + suffix}); err == nil {
+		t.Fatal("a shut-down runner must not accept an execution")
 	}
 	if code, _ := call("GET", "/api/v1/servers/srv_"+suffix, "", nil); code != 200 {
 		t.Fatalf("get server = %d", code)

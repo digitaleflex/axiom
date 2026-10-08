@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -312,11 +313,63 @@ func (a *API) createDeployment(w http.ResponseWriter, r *http.Request) (err erro
 	}
 	w.Header().Set("Location", "/api/v1/deployments/"+rec.ID)
 	if !created {
+		// Idempotent replay: the execution was started by the request that
+		// created this deployment. Re-running it would be a second execution
+		// of the same plan, so the replay only returns the original record.
 		w.Header().Set("Idempotent-Replayed", "true")
 	}
 	target = rec.ID
+	if created {
+		a.startExecution(r, app, rec)
+	}
 	writeJSON(w, http.StatusAccepted, rec)
 	return nil
+}
+
+// startExecution kicks off the background execution of a freshly created
+// deployment (#100). The record is already persisted and the caller is
+// answered 202 regardless: execution is asynchronous by contract (API
+// contract §19), so a start failure is recorded on the deployment and logged
+// rather than turned into an error suggesting nothing was created.
+func (a *API) startExecution(r *http.Request, app application.Record, rec deployment.Record) {
+	if a.runner == nil {
+		return
+	}
+	if a.plans == nil {
+		a.executors().FailUnstartable(r.Context(), rec, errors.New("deployment execution is configured without a plan read model"))
+		return
+	}
+	// The plan is the deployment's own authority for what to execute; its
+	// application must match the route, otherwise the deployment store would
+	// already have rejected the create.
+	view, err := a.plans.Get(r.Context(), rec.PlanID)
+	if err != nil {
+		a.executors().FailUnstartable(r.Context(), rec, fmt.Errorf("load plan %s: %w", rec.PlanID, err))
+		return
+	}
+	if view.ApplicationID != app.ID {
+		a.executors().FailUnstartable(r.Context(), rec, fmt.Errorf("plan %s belongs to another application", rec.PlanID))
+		return
+	}
+	// The execution is detached from the request inside the runner
+	// (executor.Runner.Start uses context.WithoutCancel), so a client
+	// disconnect never aborts a deployment.
+	if err := a.executors().Start(r.Context(), ExecutionInput{
+		Deployment: rec, Plan: view.Plan, AppSlug: app.Name, UserID: principal(r.Context()).UserID,
+	}); err != nil {
+		// A duplicate start means the execution is already running: not a
+		// failure of this request, so the deployment keeps its state.
+		if errors.Is(err, executor.ErrAlreadyRunning) {
+			return
+		}
+		a.executors().FailUnstartable(r.Context(), rec, err)
+	}
+}
+
+// executors returns the execution seam, assembled from the injected
+// dependencies. Sources is nil unless a source fetcher was configured.
+func (a *API) executors() Executors {
+	return Executors{Runner: a.runner, Sources: a.sources, Deployments: a.deployments, Log: a.log}
 }
 
 func (a *API) listDeployments(w http.ResponseWriter, r *http.Request) error {
