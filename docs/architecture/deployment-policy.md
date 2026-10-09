@@ -37,7 +37,7 @@
 ## 5. Isolation
 
 - Analysis never executes repository code (#93, #94).
-- Builds run in ephemeral 0700 workspaces with extracted (not executed) sources; builder child processes get an explicit minimal environment (#98).
+- Builds run in ephemeral 0700 workspaces with extracted (not executed) sources; builder child processes always get an explicit minimal environment — a fixed allowlist (PATH, HOME, TMPDIR, locale, Docker daemon connectivity, proxy settings) plus explicitly caller-requested entries — and never inherit the Engine process environment, so `AXIOM_SECRET_KEY`, `DATABASE_URL`, `AXIOM_API_TOKEN` and other Engine secrets cannot reach `docker build` (#98).
 - Runtime Agent accepts only typed operations, re-validates authorization and owns no orchestration (#80, #89).
 - The public API exposes no shell, no Docker/Traefik access, no database (#117 §22).
 

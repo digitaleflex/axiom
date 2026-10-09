@@ -39,10 +39,81 @@ type ImageBuilder interface {
 type ExecBuilder struct {
 	// Docker is the executable path. Empty means "docker" from PATH.
 	Docker string
-	// Env is the process environment of the docker child. When nil the
-	// parent environment is used; set it explicitly to isolate builds.
+	// Env holds extra KEY=VALUE entries for the docker child. It is applied
+	// on top of the minimal build environment built by childEnv and overrides
+	// it on key collision. It never re-enables inheritance: the Engine's own
+	// process environment is NOT passed to the child in any case, so secrets
+	// such as AXIOM_SECRET_KEY, DATABASE_URL or AXIOM_API_TOKEN can never
+	// reach `docker build` (see childEnv for the exact rules).
 	Env       []string
 	MaxLogLen int // tail of build output kept in the result
+}
+
+// defaultPATH is used for the child when the parent has no PATH of its own.
+const defaultPATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+// buildEnvNames is the complete allowlist of host variables the docker child
+// may receive. Everything else in the Engine process environment is dropped:
+// AXIOM_SECRET_KEY, DATABASE_URL, AXIOM_API_TOKEN, GitHub credentials and any
+// other operator-set variable must never be visible to a Dockerfile executed
+// during `docker build`. Build-time values belong in the build context or in
+// secret references resolved by the caller (#126), never in this list.
+var buildEnvNames = []string{
+	// Minimal process basics.
+	"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL",
+	// Docker CLI connectivity (daemon endpoint and client TLS material).
+	"DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY",
+	// Egress configuration needed to pull base images. Operators must not
+	// embed credentials in proxy URLs; those would be visible to the build.
+	"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+	"http_proxy", "https_proxy", "no_proxy",
+	// Go module proxy settings, used when a build invokes the Go toolchain.
+	"GOPROXY", "GOPRIVATE", "GOSUMDB",
+}
+
+var buildEnvAllowed = func() map[string]bool {
+	m := make(map[string]bool, len(buildEnvNames))
+	for _, n := range buildEnvNames {
+		m[n] = true
+	}
+	return m
+}()
+
+// childEnv computes the explicit environment of the docker child. The parent
+// (Engine) environment is never inherited wholesale: only names present in
+// buildEnvAllowed are copied from parent. Entries in extra (ExecBuilder.Env)
+// are then applied on top and override the base on key collision, so extra is
+// the complete caller-requested set on top of the minimal base. A PATH default
+// is added when neither parent nor extra provides one.
+func childEnv(parent []string, extra []string) []string {
+	values := make(map[string]string, len(buildEnvNames)+len(extra))
+	order := make([]string, 0, len(buildEnvNames)+len(extra))
+	put := func(kv string) {
+		name, val, ok := strings.Cut(kv, "=")
+		if !ok || name == "" {
+			return
+		}
+		if _, seen := values[name]; !seen {
+			order = append(order, name)
+		}
+		values[name] = val
+	}
+	for _, kv := range parent {
+		if name, _, ok := strings.Cut(kv, "="); ok && buildEnvAllowed[name] {
+			put(kv)
+		}
+	}
+	for _, kv := range extra {
+		put(kv)
+	}
+	if _, ok := values["PATH"]; !ok {
+		put("PATH=" + defaultPATH)
+	}
+	env := make([]string, 0, len(order))
+	for _, name := range order {
+		env = append(env, name+"="+values[name])
+	}
+	return env
 }
 
 func (b *ExecBuilder) dockerBin() string {
@@ -82,9 +153,9 @@ func (b *ExecBuilder) Build(ctx context.Context, spec BuildSpec) (ImageResult, e
 
 	cmd := exec.CommandContext(ctx, b.dockerBin(), args...)
 	cmd.Dir = spec.ContextDir
-	if b.Env != nil {
-		cmd.Env = b.Env
-	}
+	// Always set an explicit environment: a nil cmd.Env would make the child
+	// inherit the whole Engine environment (secrets included).
+	cmd.Env = childEnv(os.Environ(), b.Env)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	start := time.Now()
