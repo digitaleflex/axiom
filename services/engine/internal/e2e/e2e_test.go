@@ -1,7 +1,18 @@
-// Package e2e proves the complete V0.1 deployment path (issue #68) with a
+// Package e2e proves the complete V1 deployment path (issue #68) with a
 // real reference application: snapshot → analysis → profile → server → plan
 // → real image build → real container run → real health probe → LIVE, with
 // progress observable through persisted events and the SSE stream.
+//
+// The engine/bootstrap, agent/auth, agentkey (HMAC AD-0008), and protocol
+// (ApplicationID #145) are mounted. The agent listener (loopback + TLS
+// optionnel) and bridge (WithScope, distinct ApplicationID/DeploymentID
+// labels) are also mounted, but the end-to-end protocol handshake (listener
+// → protocol encode/decode → HMAC verify → bridge dispatch) is NOT
+// exercised by this fixture: the agent transport is in-process
+// (`dockerAgent`) rather than a real `agent/bootstrap` listener.
+// Integrating the listener into this test requires registering the agent,
+// rotating the operation-signing key, and decoding protocol messages inside
+// the test process — a multi-module change beyond this single-tour scope.
 //
 // The test needs PostgreSQL (AXIOM_TEST_DATABASE_URL), Docker
 // (AXIOM_TEST_DOCKER=1) and network access to pull the fixture base image
