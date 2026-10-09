@@ -18,6 +18,7 @@ import (
 // must never be logged. *agentkey.Service implements it.
 type AgentKeys interface {
 	Issue(ctx context.Context, agentID string) (agentkey.Key, error)
+	SigningKey(ctx context.Context, agentID string) (agentkey.Key, error)
 }
 
 // agentPublicPaths are agent-facing endpoints that authenticate with the

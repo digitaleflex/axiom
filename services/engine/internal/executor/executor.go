@@ -52,6 +52,17 @@ func New(deployments *deployment.Service, builder BuildRunner, agent RuntimeAgen
 // Execute runs a plan for an existing PENDING deployment. Steps and state
 // transitions are persisted through the deployment service; a failed step
 // stops all downstream steps; LIVE is recorded only after VERIFY succeeds.
+// Architecture choice (ADR-0008, NAT vs loopback):
+//   - In NAT deployment (agent initiates all communication over public HTTPS),
+//     the executor pushes operations to agentpoll.Manager (file d'attente par
+//     agentID) instead of calling agentclient directly. The agent then pulls
+//     via POST /api/v1/agent/poll (long-poll, 25s max) and pushes results
+//     via POST /api/v1/agent/result.
+//   - In loopback mode (agent co-localisée avec l'Engine), agentclient
+//     reste intact : il parle directement au endpoint agent local.
+//   - Le mécanisme de redirection conditionnel (NAT vs loopback) est documenté
+//     ici : si AgentPoll est non-nil dans le Deps, le mode NAT est activé ;
+//     sinon, agentclient traite directement la requête.
 func (e *PlanExecutor) Execute(ctx context.Context, req Request) (Result, error) {
 	if e.deployments == nil || e.builder == nil || e.agent == nil {
 		return Result{}, errors.New("deployment service, build runner and runtime agent are required")

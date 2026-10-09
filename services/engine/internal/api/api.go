@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/agentauth"
+	"github.com/digitaleflex/axiom/services/engine/internal/agentpoll"
 	"github.com/digitaleflex/axiom/services/engine/internal/application"
 	"github.com/digitaleflex/axiom/services/engine/internal/audit"
 	"github.com/digitaleflex/axiom/services/engine/internal/auth"
@@ -69,6 +70,7 @@ type Deps struct {
 	// answer 503: an agent registered without a key could never accept a
 	// dispatched operation.
 	AgentKeys AgentKeys
+	AgentPoll *agentpoll.Manager
 	// Authz is the authorization boundary (#127). A nil resolver denies
 	// every non-owner action (fail closed).
 	Authz *authz.Resolver
@@ -97,29 +99,30 @@ type Deps struct {
 
 // API serves /api/v1.
 type API struct {
-	log          *slog.Logger
-	auth         Authenticator
-	authSvc      *auth.Service
-	authz        *authz.Resolver
-	auditSvc     AuditService
-	deployments  *deployment.Service
-	applications application.Store
-	servers      ServerStore
-	github       GitHubConnections
-	repos        RepositoryDiscovery
-	analyses     Analyses
-	plans        Plans
-	domains      Domains
-	logs         LogStore
-	appConfig    AppConfig
-	agents       *agentauth.Service
-	agentKeys    AgentKeys
-	runner       DeploymentRunner
-	sources      SourceFetcher
-	diagnostics  *diagnostics.Service
-	consoleURL   string
-	secure       bool
-	mux          *http.ServeMux
+	log              *slog.Logger
+	auth             Authenticator
+	authSvc          *auth.Service
+	authz            *authz.Resolver
+	auditSvc         AuditService
+	deployments      *deployment.Service
+	applications     application.Store
+	servers          ServerStore
+	github           GitHubConnections
+	repos            RepositoryDiscovery
+	analyses         Analyses
+	plans            Plans
+	domains          Domains
+	logs             LogStore
+	appConfig        AppConfig
+	agents           *agentauth.Service
+	agentKeys        AgentKeys
+	agentPollManager *agentpoll.Manager
+	runner           DeploymentRunner
+	sources          SourceFetcher
+	diagnostics      *diagnostics.Service
+	consoleURL       string
+	secure           bool
+	mux              *http.ServeMux
 }
 
 // New builds the API handler with its middleware chain:
@@ -128,12 +131,13 @@ func New(d Deps) http.Handler {
 	a := &API{
 		log: d.Log, auth: d.Auth, authSvc: d.Sessions, authz: d.Authz, auditSvc: d.Audit, deployments: d.Deployments,
 		applications: d.Applications, servers: d.Servers, github: d.GitHub, repos: d.Repositories, analyses: d.Analyses, plans: d.Plans, domains: d.Domains, logs: d.Logs, appConfig: d.AppConfig,
-		agents:      d.Agents,
-		agentKeys:   d.AgentKeys,
-		runner:      d.Runner,
-		sources:     d.Sources,
-		diagnostics: d.Diagnostics,
-		consoleURL:  d.ConsoleURL, secure: d.SecureCookies, mux: http.NewServeMux(),
+		agents:           d.Agents,
+		agentKeys:        d.AgentKeys,
+		agentPollManager: d.AgentPoll,
+		runner:           d.Runner,
+		sources:          d.Sources,
+		diagnostics:      d.Diagnostics,
+		consoleURL:       d.ConsoleURL, secure: d.SecureCookies, mux: http.NewServeMux(),
 	}
 	if a.log == nil {
 		a.log = slog.Default()
@@ -211,6 +215,8 @@ func New(d Deps) http.Handler {
 	r.HandleFunc("POST /api/v1/agent/register", a.wrap(a.agentRegister))
 	r.HandleFunc("POST /api/v1/agent/rotate", a.wrap(a.agentRotate))
 	r.HandleFunc("POST /api/v1/agent/heartbeat", a.wrap(a.agentHeartbeat))
+	r.HandleFunc("POST /api/v1/agent/poll", a.wrap(a.agentPoll))
+	r.HandleFunc("POST /api/v1/agent/result", a.wrap(a.agentResult))
 	r.HandleFunc("GET /api/v1/agent/status", a.wrap(a.agentStatus))
 
 	r.HandleFunc("POST /api/v1/applications/{applicationID}/deployments", a.wrap(a.createDeployment))

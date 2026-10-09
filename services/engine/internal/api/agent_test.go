@@ -27,6 +27,13 @@ func (fakeAgentKeys) Issue(_ context.Context, _ string) (agentkey.Key, error) {
 	}
 	return agentkey.Key(key), nil
 }
+func (fakeAgentKeys) SigningKey(_ context.Context, _ string) (agentkey.Key, error) {
+	key := make([]byte, agentkey.KeySize)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	return agentkey.Key(key), nil
+}
 
 // operationSigningKey asserts the response field: lowercase hex of exactly
 // KeySize bytes, returned exactly once, never empty. The plaintext is the
