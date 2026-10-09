@@ -14,6 +14,7 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/audit"
 	"github.com/digitaleflex/axiom/services/engine/internal/auth"
 	"github.com/digitaleflex/axiom/services/engine/internal/authz"
+	"github.com/digitaleflex/axiom/services/engine/internal/webhook"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/diagnostics"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
@@ -176,6 +177,7 @@ func New(d Deps) http.Handler {
 	r.HandleFunc("GET /api/v1/repositories/{repositoryID}", a.wrap(a.getRepository))
 	r.HandleFunc("GET /api/v1/repositories/{repositoryID}/refs", a.wrap(a.listRefs))
 	r.HandleFunc("GET "+githubCallbackPath, a.githubCallback) // public: protected by single-use state + browser cookie
+	r.HandleFunc("POST /api/v1/webhook/github", webhook.New(a.log).ServeHTTP)
 
 	r.HandleFunc("GET /api/v1/applications", a.wrap(a.listApplications))
 	r.HandleFunc("POST /api/v1/applications", a.wrap(a.createApplication))
