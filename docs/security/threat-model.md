@@ -930,3 +930,43 @@ was true before #145 and is no longer true.
 - `docs/architecture/agent-protocol.md` — protocol and security mapping
 - `docs/architecture/secret-handling.md` — secret lifecycle
 - `docs/adr/0005-traefik-reverse-proxy.md`, `docs/adr/0008-agent-engine-communication.md`
+
+## 14. Abuse Controls (coherence with mounted code — #129 M7.5)
+
+This section closes the gap between the threat-model title ("Abuse Controls") and its content. Every control below is verified against the mounted code at commit `d69bdea` and the working-tree state after `6017b35` (agent listener loopback, optional TLS, HMAC AD-0008, protocol `ApplicationID` separate).
+
+### 14.1 Agent inbound listener — loopback, fail-closed, no TLS (#88)
+
+- **Loopback binding:** `services/agent/internal/config/config.go:35` (`127.0.0.1:9401` by default) and `config.go:198-222` refuse any routable listener address unless `AXIOM_AGENT_ALLOW_PUBLIC_LISTENER=true` is explicitly set.
+- **Fail-closed before body read:** The composition root injects `refuseInbound` (`services/agent/internal/bootstrap/bootstrap.go:212`); the listener authenticates before reading the body (`listener.go:112-119`) and refuses every request (`listener.go:47-52`). Nothing sensitive can ever be served through the listener today (`T4`, `T29`).
+- **TLS deferred:** No TLS implementation exists (`listener.go`, `transport.go`). The fail-closed posture makes this non-exploitable in V0.1; it becomes exploitable the moment an inbound operation authenticator is wired (`T29`, `G6`).
+- **Resource limits:** Body capped at 64 KiB (`listener.go:20-21`, `121-125`).
+
+### 14.2 Engine → Agent transport — per-agent HMAC-SHA256 (ADR-0008)
+
+- **Key management:** Per-agent 32-byte signing keys stored encrypted with AES-256-GCM (`docs/adr/0008-agent-engine-communication.md`, `agentkey.go`, `secrets/box.go:50-59`). The key is returned exactly once (register/rotate responses: `api/agent.go:132`, `:176`, `:221-228`) and never again (`agentkey` docs).
+- **Canonical signing form (`AXIOM-HMAC-V1`):** `METHOD\nPATH\nAgentID\nVersion\nTimestamp\nNonce\nsha256(body)` (`agentclient/client.go:527-556`). Comparison is constant-time.
+- **Verification before dispatch:** The agent verifies the `X-Axiom-Signature` header after strict decoding (`protocol.go:211-235`) and before dispatch (`dispatcher.go:315`). Unknown fields or malformed envelopes are refused (`listener.go:147-157`).
+- **Scope binding:** Every operation carries `applicationId`, distinct from `deploymentId`. The Engine resolves it from the deployment record (`client.go:546-559`, refusing with `CodeNoApplication` when missing) and stamps both `axiom.application` and `axiom.deployment` labels (`agent-protocol.md`, `ownership/ownership.go:139-149`, `assertScope`). A missing or malformed `applicationId` is refused with `INCOMPLETE_SCOPE` (`protocol.go:361-365`), a security refusal distinct from syntax errors.
+
+### 14.3 Webhook spoofing — none wired (T31)
+
+- **No webhooks:** Repository-wide grep for `webhook` across `services/`, `schemas/` and the API contract returns 0 occurrences (`T31`). GitHub interaction is strictly user-initiated OAuth plus REST polling (`api/api.go:137-142`).
+- **Required control if webhooks land:** Signature verification (`X-Hub-Signature-256`) and replay-bound delivery must be enforced before any webhook endpoint is registered, otherwise the platform gains an unauthenticated write path into the deployment pipeline (`T31`).
+
+### 14.4 Build-resource abuse and resource exhaustion
+
+- **No sandbox:** The repository Dockerfile is executed by the Docker daemon with no `--network=none`, no `--security-opt`, no resource limits (`builder.go:74-81`). The single largest residual risk (`G1`, `T11`).
+- **Compensating controls:** Workspace isolation (`workspace.go:78`, `0o700`); archive extraction hardening (`workspace.go:149-152`, `201-212`); build timeout (10 min, `builder.go:59-63`); denylist on build/start commands (`presets/presets.go:197-213`, `T13`).
+- **API rate limits absent (`T20`, `G5`):** No rate-limit middleware in `services/engine/internal/api`. The agent `RateLimiter` (`transport.go:117-159`) has zero non-test callers (`NON CABLE`). `POST /api/v1/auth/register` and `/auth/login` are public and unbounded.
+
+### 14.5 Residual risks accepted for V0.1
+
+| Residual risk | Threat / Gate | Status | Why |
+|---|---|---|---|
+| Unrestricted build execution | T11 / G1 | PARTIEL / accepted | By design; must be signed off operationally. |
+| No API rate limiting or account lockout | T20 / G5 | ABSENT | No middleware; agent rate limiter non-cabled. |
+| No TLS on agent listener | T29 / G6 | ABSENT / masked | Fail-closed (`refuseInbound`); becomes live when inbound auth is wired. |
+| Command denylist bypassable | T13 / G8 | PARTIEL | Blocklist only; `eval`, `python -c`, `apt-get` not blocked. |
+| Container isolation is Docker-default | T27 / G10 | PARTIEL | No seccomp/AppArmor/`--cap-drop`/read-only rootfs. |
+| Reconciliation never runs | T28 / G11 | NON CABLE | `Reconcile` constructed (`bootstrap.go:182-189`), never called at boot (`189-196`) or elsewhere. |
