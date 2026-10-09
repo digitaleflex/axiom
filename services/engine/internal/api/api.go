@@ -14,6 +14,7 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/auth"
 	"github.com/digitaleflex/axiom/services/engine/internal/authz"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
+	"github.com/digitaleflex/axiom/services/engine/internal/diagnostics"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
 )
 
@@ -76,6 +77,12 @@ type Deps struct {
 	// Sources streams the archive of the commit a deployment builds (#98).
 	// Without it a triggered execution fails at the build step.
 	Sources SourceFetcher
+	// Diagnostics serves the read-only deployment diagnostic (#102): the
+	// steps, durations, error codes, target server state, last health probe
+	// and the conclusion an operator can draw from a failure. A nil service
+	// makes the diagnostic endpoints answer 503; it never changes behaviour
+	// of any other endpoint.
+	Diagnostics *diagnostics.Service
 	// ConsoleURL is where the GitHub callback redirects the browser.
 	ConsoleURL string
 	// SecureCookies sets the Secure attribute on cookies (production).
@@ -102,6 +109,7 @@ type API struct {
 	agents       *agentauth.Service
 	runner       DeploymentRunner
 	sources      SourceFetcher
+	diagnostics  *diagnostics.Service
 	consoleURL   string
 	secure       bool
 	mux          *http.ServeMux
@@ -113,10 +121,11 @@ func New(d Deps) http.Handler {
 	a := &API{
 		log: d.Log, auth: d.Auth, authSvc: d.Sessions, authz: d.Authz, auditSvc: d.Audit, deployments: d.Deployments,
 		applications: d.Applications, servers: d.Servers, github: d.GitHub, repos: d.Repositories, analyses: d.Analyses, plans: d.Plans, domains: d.Domains, logs: d.Logs, appConfig: d.AppConfig,
-		agents:     d.Agents,
-		runner:     d.Runner,
-		sources:    d.Sources,
-		consoleURL: d.ConsoleURL, secure: d.SecureCookies, mux: http.NewServeMux(),
+		agents:      d.Agents,
+		runner:      d.Runner,
+		sources:     d.Sources,
+		diagnostics: d.Diagnostics,
+		consoleURL:  d.ConsoleURL, secure: d.SecureCookies, mux: http.NewServeMux(),
 	}
 	if a.log == nil {
 		a.log = slog.Default()
@@ -126,6 +135,17 @@ func New(d Deps) http.Handler {
 	}
 	if a.authz == nil {
 		a.authz = authz.NewResolver(nil) // V0.1: single-user ownership
+	}
+	// Diagnostics (#102) is composed from dependencies the API already
+	// holds, so it is never left unwired while a deployment store exists.
+	// Each section degrades on its own: a nil logs or servers store makes
+	// that section unavailable, not the whole report.
+	if a.diagnostics == nil && a.deployments != nil {
+		var logReader diagnostics.LogReader
+		if a.logs != nil {
+			logReader = a.logs
+		}
+		a.diagnostics = diagnostics.New(a.deployments.Store(), a.servers, logReader, a.probeLookupFor())
 	}
 
 	r := a.mux
@@ -193,6 +213,10 @@ func New(d Deps) http.Handler {
 	r.HandleFunc("GET /api/v1/deployments/{deploymentID}/events", a.wrap(a.deploymentEvents))
 	r.HandleFunc("GET /api/v1/deployments/{deploymentID}/logs", a.wrap(a.deploymentLogs))
 	r.HandleFunc("GET /api/v1/deployments/{deploymentID}/health", a.wrap(a.deploymentHealth))
+	// Read-only diagnostics (#102): why a deployment failed, without SSH.
+	// One route per page; neither mutates any state.
+	r.HandleFunc("GET /api/v1/deployments/{deploymentID}/diagnostics", a.wrap(a.deploymentDiagnostic))
+	r.HandleFunc("GET /api/v1/deployments/{deploymentID}/diagnostics/logs", a.wrap(a.deploymentDiagnosticLogs))
 	if d.EventStream != nil {
 		r.Handle("GET /api/v1/deployments/{deploymentID}/events/stream", a.ownedDeployment(d.EventStream))
 	} else {

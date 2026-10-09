@@ -31,10 +31,12 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/database"
 	deploymentdb "github.com/digitaleflex/axiom/services/engine/internal/database/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
+	"github.com/digitaleflex/axiom/services/engine/internal/diagnostics"
 	"github.com/digitaleflex/axiom/services/engine/internal/domains"
 	"github.com/digitaleflex/axiom/services/engine/internal/executor"
 	ghauth "github.com/digitaleflex/axiom/services/engine/internal/github/auth"
 	"github.com/digitaleflex/axiom/services/engine/internal/github/repos"
+	"github.com/digitaleflex/axiom/services/engine/internal/health"
 	"github.com/digitaleflex/axiom/services/engine/internal/httpserver"
 	"github.com/digitaleflex/axiom/services/engine/internal/logs"
 	"github.com/digitaleflex/axiom/services/engine/internal/observability/metrics"
@@ -187,6 +189,17 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 	// (#66), so the concrete store is kept alongside the narrow API view.
 	logStore := logs.NewPGStore(db, 0)
 	deps.Logs = logStore
+	// Deployment diagnostics (#102): strictly read-only, assembled from the
+	// stores the Engine already owns (steps, server records, the redacted
+	// journal, the persisted health probe). Wired here so the composition
+	// root states the dependency explicitly rather than relying on a
+	// fallback inside the API.
+	deps.Diagnostics = diagnostics.New(
+		deps.Deployments.Store(), deps.Servers, logStore,
+		func(ctx context.Context, deploymentID string) (health.ProbeReport, bool, error) {
+			return executor.LastHealthResult(ctx, deps.Deployments.Store(), deploymentID)
+		},
+	)
 	// Audit trail (#128): privileged operation events, persisted redacted.
 	deps.Audit = audit.NewService(audit.NewPGStore(db))
 	deps.Plans = &planner.Service{Engine: planner.New(), Profiles: analysis.PGStore{DB: db}, Servers: deps.Servers, Domains: domainService, DB: db, NewID: deployment.NewID}

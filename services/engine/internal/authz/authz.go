@@ -27,13 +27,17 @@ const (
 	ActionApplicationDelete Action = "application.delete"
 	ActionDeploymentCreate  Action = "deployment.create"
 	ActionDeploymentCancel  Action = "deployment.cancel"
-	ActionServerRead        Action = "server.read"
-	ActionServerWrite       Action = "server.write"
-	ActionServerRegister    Action = "server.register"
-	ActionServerRemove      Action = "server.remove"
-	ActionDomainWrite       Action = "domain.write"
-	ActionConfigWrite       Action = "config.write"
-	ActionGitHubManage      Action = "github.manage"
+	// ActionDeploymentRead guards read-only deployment projections, notably
+	// the diagnostics API (#102). It is a read action: an organization
+	// member may inspect a failure without being able to change it.
+	ActionDeploymentRead Action = "deployment.read"
+	ActionServerRead     Action = "server.read"
+	ActionServerWrite    Action = "server.write"
+	ActionServerRegister Action = "server.register"
+	ActionServerRemove   Action = "server.remove"
+	ActionDomainWrite    Action = "domain.write"
+	ActionConfigWrite    Action = "config.write"
+	ActionGitHubManage   Action = "github.manage"
 )
 
 // Actor is the authenticated principal mirrored from api.Principal. The
@@ -153,7 +157,7 @@ func (r *Resolver) Authorize(ctx context.Context, actor Actor, action Action, re
 // isReadAction reports whether an action only observes state.
 func isReadAction(action Action) bool {
 	switch action {
-	case ActionApplicationRead, ActionServerRead:
+	case ActionApplicationRead, ActionServerRead, ActionDeploymentRead:
 		return true
 	default:
 		return false
