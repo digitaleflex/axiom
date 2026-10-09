@@ -16,12 +16,14 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -32,6 +34,7 @@ import (
 	"github.com/digitaleflex/axiom/services/agent/internal/heartbeat"
 	"github.com/digitaleflex/axiom/services/agent/internal/identity"
 	"github.com/digitaleflex/axiom/services/agent/internal/logs"
+	"github.com/digitaleflex/axiom/services/agent/internal/metrics"
 	"github.com/digitaleflex/axiom/services/agent/internal/protocol"
 	"github.com/digitaleflex/axiom/services/agent/internal/recovery"
 	"github.com/digitaleflex/axiom/services/agent/internal/runtime/docker"
@@ -231,8 +234,12 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	//     authenticator is built (ADR-0008).
 	app.authHeader = app.inboundAuthenticator()
 	app.Listener = newOperationsListener(cfg.Listener.Path, app.authHeader, app)
+	reg := metrics.NewRegistry()
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", metrics.Handler(reg))
+	mux.Handle(cfg.Listener.Path, app.Listener.Handler())
 	app.server = &http.Server{
-		Handler:           app.Listener.Handler(),
+		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// No WriteTimeout: an operation may legitimately run for minutes
@@ -336,7 +343,31 @@ func (a *App) Dispatch(ctx context.Context, op protocol.Operation) (protocol.Ack
 // The listener is bound before Run returns control, so a bind failure surfaces
 // immediately instead of after registration.
 func (a *App) Run(ctx context.Context) error {
-	ln, err := net.Listen("tcp", a.cfg.Listener.Addr)
+	certFile := os.Getenv("AXIOM_AGENT_TLS_CERT")
+	keyFile := os.Getenv("AXIOM_AGENT_TLS_KEY")
+	hasTLS := certFile != "" && keyFile != "" && filepath.IsAbs(certFile) && filepath.IsAbs(keyFile)
+	if hasTLS {
+		if _, err := os.Stat(certFile); err != nil {
+			hasTLS = false
+		} else if _, err := os.Stat(keyFile); err != nil {
+			hasTLS = false
+		}
+	}
+	var ln net.Listener
+	var err error
+	if hasTLS {
+		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+		cert, errCert := tls.LoadX509KeyPair(certFile, keyFile)
+		if errCert != nil {
+			return fmt.Errorf("tls load %s/%s: %w", certFile, keyFile, errCert)
+		}
+		tlsConfig.Certificates = []tls.Certificate{cert}
+		a.server.TLSConfig = tlsConfig
+		ln, err = tls.Listen("tcp", a.cfg.Listener.Addr, tlsConfig)
+		a.log.Info("agent listener TLS enabled", "addr", a.cfg.Listener.Addr, "cert", certFile)
+	} else {
+		ln, err = net.Listen("tcp", a.cfg.Listener.Addr)
+	}
 	if err != nil {
 		a.Close()
 		return fmt.Errorf("listen %s: %w", a.cfg.Listener.Addr, err)

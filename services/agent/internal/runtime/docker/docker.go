@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/digitaleflex/axiom/services/agent/internal/runtime/presets/docker"
 	"github.com/digitaleflex/axiom/services/agent/internal/security/ownership"
 )
 
@@ -129,6 +130,10 @@ func (a *Adapter) runner() Runner {
 		return a.Runner
 	}
 	return &ExecRunner{Docker: a.Docker}
+}
+
+func (a *Adapter) presetBranch() bool {
+	return presetdocker.Preset()
 }
 
 func (a *Adapter) now() time.Time {
