@@ -13,6 +13,7 @@ import {
   type StepState,
 } from './stepMapping'
 import type { DeploymentStep, Profile } from '../api/types'
+import { DEPLOYMENT_EVENT_TYPES, isDeploymentEventType } from '../api/sse'
 
 describe('blocking gate (profile review)', () => {
   it('allows Continue only for ready profiles', () => {
@@ -120,6 +121,52 @@ describe('SSE event → step mapping', () => {
     expect(isTerminalStatus('LIVE')).toBe(true)
     expect(isTerminalStatus('FAILED')).toBe(true)
     expect(isTerminalStatus('BUILDING')).toBe(false)
+  })
+
+  // Alignment with the Engine: api-contract §14 is the authoritative event
+  // list, and the Engine emits all of it (deployment/event.go + health/health.go).
+  it('lists exactly the event types of api-contract §14', () => {
+    expect([...DEPLOYMENT_EVENT_TYPES].sort()).toEqual([
+      'deployment.created',
+      'deployment.status.changed',
+      'deployment.step.completed',
+      'deployment.step.failed',
+      'deployment.step.skipped',
+      'deployment.step.started',
+      'health.failed',
+      'health.passed',
+    ])
+  })
+
+  it('has a mapping decision for every event type the Engine can emit', () => {
+    for (const type of DEPLOYMENT_EVENT_TYPES) {
+      expect(isDeploymentEventType(type)).toBe(true)
+      // Explicitly accounted for: either a mapping, or a documented no-op.
+      const mapping = mapDeploymentEvent(type, {})
+      expect(mapping === null || typeof mapping === 'object').toBe(true)
+    }
+  })
+
+  it('maps deployment.created and deployment.step.skipped (Engine-emitted, formerly missing)', () => {
+    expect(mapDeploymentEvent('deployment.created', { status: 'PENDING', planId: 'plan_1', number: 42 })).toEqual({
+      status: 'PENDING',
+    })
+    const skipped = mapDeploymentEvent('deployment.step.skipped', { step: 'NETWORK', status: 'SKIPPED' })
+    expect(skipped).toEqual({ step: 'NETWORK', state: 'skipped' })
+
+    const steps: DeploymentStep[] = [
+      { name: 'NETWORK', status: 'QUEUED' },
+      { name: 'VERIFY', status: 'QUEUED' },
+    ]
+    const applied = applyStepEvent(steps, skipped!)
+    expect(applied[0].status).toBe('SKIPPED')
+    expect(normalizeStepState(applied[0].status)).toBe('skipped')
+    expect(applied[1].status).toBe('QUEUED')
+  })
+
+  it('ignores deployment.log.appended: not an Engine event, absent from the contract', () => {
+    expect(DEPLOYMENT_EVENT_TYPES).not.toContain('deployment.log.appended')
+    expect(isDeploymentEventType('deployment.log.appended')).toBe(false)
   })
 
   it('maps deployment statuses to typically-active steps (presentation only)', () => {

@@ -1,4 +1,5 @@
 import type { DeploymentStep } from '../api/types'
+import type { DeploymentEventType } from '../api/sse'
 
 /**
  * SSE event → step/status mapping (deployment-progress §1, §8).
@@ -6,6 +7,11 @@ import type { DeploymentStep } from '../api/types'
  * Events are applied idempotently: a step never moves backwards, and a
  * terminal status is final. Step data, when present, always wins over
  * status-derived emphasis.
+ *
+ * The table below is keyed by {@link DeploymentEventType} and typed with
+ * `satisfies Record<DeploymentEventType, …>`, so TypeScript fails to compile if
+ * the Engine ever gains an event type that this console has no case for. The
+ * exhaustive list comes from api-contract §14.
  */
 export type StepState = 'queued' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled'
 
@@ -21,26 +27,67 @@ export interface StepEventMapping {
   status?: string
 }
 
+function str(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
+
+/**
+ * One entry per event type of api-contract §14.
+ *
+ * - `deployment.created` carries `{ status, planId, number }`; only the status
+ *   is meaningful here (always `PENDING` at that point) and it is already
+ *   known from the snapshot, so mapping it is harmless and keeps the stream
+ *   self-sufficient.
+ * - `deployment.step.skipped` carries `{ step, status: "SKIPPED" }` and is
+ *   rendered as the "Skipped" state of deployment-progress §1.3 (INACTIVE,
+ *   dash). `applyStepEvent` writes the uppercased state, which is exactly the
+ *   `SKIPPED` value `normalizeStepState` reads back.
+ * - `health.passed` / `health.failed` carry a probe report
+ *   (`{ status, statusCode, latencyMs, path, checkedAt, attempt, … }`), not a
+ *   step or a deployment status. The Progress screen has no health line —
+ *   deployment-progress §1.3 has no health step state, and the health result is
+ *   displayed by the Health tab — so these are explicitly no-ops rather than
+ *   silently falling through. TODO: render the probe outcome in the "Live
+ *   events" feed as described by deployment-progress §5 line 127
+ *   ("health-check results"). Needs a product decision on the exact wording,
+ *   hence not invented here.
+ */
+const EVENT_MAPPING = {
+  'deployment.created': (data: Record<string, unknown>): StepEventMapping => ({
+    status: str(data.status),
+  }),
+  'deployment.status.changed': (data: Record<string, unknown>): StepEventMapping => ({
+    status: str(data.status),
+  }),
+  'deployment.step.started': (data: Record<string, unknown>): StepEventMapping => ({
+    step: str(data.step),
+    state: 'running',
+  }),
+  'deployment.step.completed': (data: Record<string, unknown>): StepEventMapping => ({
+    step: str(data.step),
+    state: 'completed',
+  }),
+  'deployment.step.failed': (data: Record<string, unknown>): StepEventMapping => ({
+    step: str(data.step),
+    state: 'failed',
+  }),
+  'deployment.step.skipped': (data: Record<string, unknown>): StepEventMapping => ({
+    step: str(data.step),
+    state: 'skipped',
+  }),
+  'health.passed': (): StepEventMapping | null => null,
+  'health.failed': (): StepEventMapping | null => null,
+} satisfies Record<DeploymentEventType, (data: Record<string, unknown>) => StepEventMapping | null>
+
 /** Maps an SSE event type + payload to a step state and/or deployment status. */
 export function mapDeploymentEvent(
-  type: string | undefined,
+  type: DeploymentEventType | undefined,
   data: Record<string, unknown> | undefined,
 ): StepEventMapping | null {
-  const payload = data ?? {}
-  switch (type) {
-    case 'deployment.step.started':
-      return { step: payload.step as string, state: 'running' }
-    case 'deployment.step.completed':
-      return { step: payload.step as string, state: 'completed' }
-    case 'deployment.step.failed':
-      return { step: payload.step as string, state: 'failed' }
-    case 'deployment.step.skipped':
-      return { step: payload.step as string, state: 'skipped' }
-    case 'deployment.status.changed':
-      return { status: payload.status as string }
-    default:
-      return null
-  }
+  if (type === undefined) return null
+  const handler = EVENT_MAPPING[type]
+  if (!handler) return null
+  return handler(data ?? {})
 }
 
 /**

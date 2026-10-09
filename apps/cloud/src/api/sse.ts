@@ -100,19 +100,71 @@ export class OrderedDelivery {
   }
 }
 
-/** Event names emitted by the Engine (api-contract §15, §23). */
+/**
+ * Event names emitted by the Engine.
+ *
+ * Authoritative source: api-contract §14 ("Deployment events", the `Event
+ * types:` sentence) — the list is reproduced verbatim there:
+ * `deployment.created`, `deployment.status.changed`, `deployment.step.started`,
+ * `deployment.step.completed`, `deployment.step.failed`,
+ * `deployment.step.skipped`, `health.passed`, `health.failed`.
+ *
+ * Every entry is verified to be produced by the Engine:
+ * - `deployment.*` step/status events are defined in
+ *   `services/engine/internal/deployment/event.go:10-15` and persisted through
+ *   the deployment event store (`internal/database/deployment/store.go`).
+ *   `deployment.created` is emitted on create
+ *   (`internal/database/deployment/store.go:166`), `deployment.step.skipped`
+ *   is the default branch of `stepEventType` for any non-running /
+ *   non-completed / non-failed step (`internal/deployment/memstore.go:276-287`).
+ * - `health.passed` / `health.failed` are defined in
+ *   `services/engine/internal/health/health.go:32-33` and appended by
+ *   `RecordHealth` (`internal/deployment/service.go:114-116`), so they travel
+ *   on the very same stream.
+ *
+ * NOT a member of this list: `deployment.log.appended`. It was previously
+ * listed here but the Engine never emits it — build output goes to the
+ * `deployment_logs` table via `internal/logs.Appender`, which has no event
+ * counterpart. api-contract §14 "Deployment logs" defines logs as a separate
+ * keyset-paginated resource (`GET /api/v1/deployments/{id}/logs`), and §15
+ * "Realtime deployment updates" scopes SSE to deployment progress only: the
+ * frame list it enumerates (`event: deployment.step.started`,
+ * `deployment.step.completed`, `deployment.status.changed`) contains no log
+ * event. Nothing in the contract requires live log streaming, so the entry was
+ * removed here rather than adding an emission point to the Engine.
+ *
+ * Note the Engine's audit / authz action names (`deployment.cancel` in
+ * `internal/api/handlers.go:468` and `ActionDeploymentCancel` in
+ * `internal/authz/authz.go:29`) are *not* event types and are correctly absent.
+ */
 export const DEPLOYMENT_EVENT_TYPES = [
+  'deployment.created',
   'deployment.status.changed',
   'deployment.step.started',
   'deployment.step.completed',
   'deployment.step.failed',
-  'deployment.log.appended',
+  'deployment.step.skipped',
+  'health.passed',
+  'health.failed',
 ] as const
+
+/** Union of every event type the Engine can put on the deployment stream. */
+export type DeploymentEventType = (typeof DEPLOYMENT_EVENT_TYPES)[number]
+
+const DEPLOYMENT_EVENT_TYPE_SET: ReadonlySet<string> = new Set(DEPLOYMENT_EVENT_TYPES)
+
+/**
+ * Narrows a raw SSE frame name to the contract §14 union. Frames the Engine
+ * does not know about are filtered out by the caller instead of being cast.
+ */
+export function isDeploymentEventType(type: string): type is DeploymentEventType {
+  return DEPLOYMENT_EVENT_TYPE_SET.has(type)
+}
 
 export interface SseStreamOptions {
   path: string
   lastEventId?: string | null
-  eventTypes?: readonly string[]
+  eventTypes?: readonly DeploymentEventType[]
   onMessage: (message: SseMessage) => void
   onOpen?: () => void
   onReconnect?: (attempt: number, delayMs: number) => void

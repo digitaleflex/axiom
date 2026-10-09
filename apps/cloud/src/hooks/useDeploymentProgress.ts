@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getDeployment, listSteps } from '../api/resources'
 import type { Deployment, DeploymentStep } from '../api/types'
-import { SseStream, type SseMessage } from '../api/sse'
+import { SseStream, isDeploymentEventType, type SseMessage } from '../api/sse'
 import { applyStepEvent, mapDeploymentEvent } from '../workflow/stepMapping'
 
 export type ProgressConnection = 'connecting' | 'live' | 'reconnecting' | 'polling'
@@ -113,14 +113,18 @@ export function useDeploymentProgress(deploymentId: string | undefined): Deploym
           } catch {
             // non-JSON frame — ignore
           }
+          // Unknown event types are dropped, never cast (api-contract §14 is
+          // the exhaustive list).
+          if (!isDeploymentEventType(message.type)) return
           const mapping = mapDeploymentEvent(message.type, data)
           if (!mapping) return
           if (mapping.status) {
-            setStatus(mapping.status)
-            setDeployment((prev) => (prev ? { ...prev, status: mapping.status! } : prev))
+            const status = mapping.status
+            setStatus(status)
+            setDeployment((prev) => (prev ? { ...prev, status } : prev))
           }
           if (mapping.step && mapping.state) {
-            setSteps((prev) => applyStepEvent(prev, mapping!))
+            setSteps((prev) => applyStepEvent(prev, mapping))
           }
         },
         onOpen: () => {
