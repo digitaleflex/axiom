@@ -15,7 +15,7 @@ The agent initiates every exchange. The Engine never opens a connection towards 
 
 Registration, rotation and heartbeat are on their existing routes (`services/engine/internal/api/api.go:200-203`). The poll and result routes are decided by ADR-0008 but **not yet registered** in the router: dispatch cannot be exercised end to end until they are.
 
-A second transport exists and is retained for one configuration only: the agent's own listener, whose address `AXIOM_AGENT_LISTEN_ADDR` is refused unless it is a loopback address or `AXIOM_AGENT_ALLOW_PUBLIC_LISTENER=true` is set (`services/agent/internal/config/config.go:210-221`). That listener serves `POST /api/v1/agent/operations` (`services/agent/internal/config/config.go:131`, `services/engine/internal/agentclient/client.go:92`) and is the path for a **self-hosted loopback deployment only**. It is not the hosted transport.
+A second transport exists and is retained for one configuration only: the agent's own listener, whose address `AXIOM_AGENT_LISTEN_ADDR` is refused unless it is a loopback address or `AXIOM_AGENT_ALLOW_PUBLIC_LISTENER=true` is set (`services/agent/internal/config/config.go:210-221`). That listener serves `POST /api/v1/agent/operations` (`services/agent/internal/config/config.go:131`, `services/engine/internal/agentclient/client.go:104`) and is the path for a **self-hosted loopback deployment only**. It is not the hosted transport.
 
 Because both legs are ordinary HTTPS, the agent's outbound hardening applies to poll and result unchanged: 64 KiB request and response limits, endpoint allow-list, `https` only outside loopback, timeout policy (`services/agent/internal/security/transport/transport.go:18-32`, `transport.go:71-92`).
 
@@ -180,7 +180,7 @@ Capabilities ride on registration and heartbeat (`capabilities: ["docker", "trae
 
 Codes (`protocol.go:352-366`): `UNKNOWN_OPERATION`, `UNAUTHORIZED`, `FORBIDDEN`, `INVALID_MESSAGE`, `STALE_MESSAGE`, `REPLAYED`, `VERSION_MISMATCH`, `INTERNAL`, `INCOMPLETE_SCOPE`.
 
-Transport-level failures on the Engine side use a separate, agentclient-owned set (`client.go:50-65`, the `Error` code set): `AGENT_NO_CREDENTIAL`, `AGENT_NOT_FOUND`, `AGENT_UNREACHABLE`, `AGENT_TIMEOUT`, `AGENT_OPERATION_REJECTED`, `AGENT_OPERATION_FAILED`, `AGENT_MALFORMED_RESPONSE`, `AGENT_RESPONSE_TOO_LARGE`, `AGENT_INSECURE_ENDPOINT`, `AGENT_INTERNAL`, `AGENT_NO_APPLICATION` (a deployment whose application cannot be resolved is refused before the wire, `client.go:546-559`).
+Transport-level failures on the Engine side use a separate, agentclient-owned set (`client.go:55-75`, the `Error` code set): `AGENT_NO_CREDENTIAL` (the Engine holds no signing key for the agent — no signer wired or none stored; the operation is never dispatched unsigned, `client.go:637-655`), `AGENT_NOT_FOUND`, `AGENT_UNREACHABLE`, `AGENT_TIMEOUT`, `AGENT_OPERATION_REJECTED`, `AGENT_OPERATION_FAILED`, `AGENT_MALFORMED_RESPONSE`, `AGENT_RESPONSE_TOO_LARGE`, `AGENT_INSECURE_ENDPOINT`, `AGENT_INTERNAL`, `AGENT_NO_APPLICATION` (a deployment whose application cannot be resolved is refused before the wire, `client.go:603-620`).
 
 ## 10. Authentication and Signing
 
@@ -194,7 +194,7 @@ The Engine holds no credential to present back: `agentauth` stores hashes only a
 
 ### Engine → agent: per-agent operation signing
 
-Every dispatched operation is signed by a per-agent HMAC-SHA256 key, managed by a new Engine package `services/engine/internal/agentkey` (**not yet written**), stored AES-256-GCM encrypted in the existing secret store (`services/engine/internal/security/secrets/box.go:1-2`) and scoped `agent:<agentId>/operation-signing-key`. Plaintext is returned once, at registration.
+Every dispatched operation is signed by a per-agent HMAC-SHA256 key, managed by the Engine package `services/engine/internal/agentkey`, stored AES-256-GCM encrypted in the existing secret store (`services/engine/internal/security/secrets/box.go:1-2`) and scoped `agent:<agentId>/operation-signing-key` (`ScopePrefix`/`KeyName`, `agentkey.go`). The plaintext key is returned once, at registration and at every rotation, in the `operationSigningKey` field (lowercase hex) of the register/rotate response (`services/engine/internal/api/agent.go:221-228`); `agentkey.Service.SigningKey` decrypts it for signing only.
 
 Canonical form, `\n`-joined:
 
@@ -202,7 +202,7 @@ Canonical form, `\n`-joined:
 AXIOM-HMAC-V1\n<METHOD>\n<PATH>\n<AgentID>\n<Version>\n<Timestamp>\n<Nonce>\n<sha256(body)>
 ```
 
-This leg already carries `Authorization`, `X-Credential-Version`, `X-Timestamp` and `X-Nonce` on the loopback path (`client.go:488-496`); the signature is additive on top of those.
+This leg carries `X-Timestamp`, `X-Nonce` and `X-Axiom-Signature` on every operation (`client.go:527-556`); `Authorization` and `X-Credential-Version` remain on the loopback path as an optional compatibility seam and the absence of a bearer credential never blocks a request. The signature is computed over the exact bytes sent (`client.go:460`), and the canonical form is pinned by a golden vector in `services/engine/internal/agentkey` and `services/engine/internal/agentclient`, byte-identical with the agent's `operationkey`.
 
 The hex signature travels in `X-Axiom-Signature` and is compared in constant time. Verification happens **after strict decoding and before dispatch** — an operation the agent cannot attribute to an authenticated message is never executed.
 

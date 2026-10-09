@@ -10,7 +10,7 @@ Runtime Agents run on user servers, often behind NAT/firewalls. The Engine must 
 
 The domain contract is fixed in [`docs/architecture/agent-protocol.md`](../architecture/agent-protocol.md) with machine types in `services/agent/internal/protocol/`.
 
-The constraint that decided the credential question: `services/engine/internal/agentauth` stores credential **hashes** only and returns plaintext exactly once at issue time (`services/engine/internal/agentauth/service.go:1-8`), so after registration the Engine holds nothing it could present to an agent. The inbound listener reflects this — its production authenticator `refuseInbound` returns `ErrUnauthenticated` for every request (`services/agent/internal/bootstrap/listener.go:48-52`), and on the Engine side the injected `CredentialProvider` seam refuses with the stable code `AGENT_NO_CREDENTIAL` (`services/engine/internal/agentclient/client.go:51`, `client.go:561-570`).
+The constraint that decided the credential question: `services/engine/internal/agentauth` stores credential **hashes** only and returns plaintext exactly once at issue time (`services/engine/internal/agentauth/service.go:1-8`), so after registration the Engine holds nothing it could present to an agent. The inbound listener reflects this — its production authenticator `refuseInbound` returns `ErrUnauthenticated` for every request (`services/agent/internal/bootstrap/listener.go:48-52`), and on the Engine side the injected `CredentialProvider` seam could only refuse with the stable code `AGENT_NO_CREDENTIAL` (`services/engine/internal/agentclient/client.go`) — since the decision landed, that seam is non-blocking and the code reports a missing per-agent signing key instead (`client.go:55-61`, `client.go:637-655`).
 
 ## Decision
 
@@ -29,7 +29,7 @@ Registration, rotation and heartbeat stay on their existing routes (`services/en
 
 The agent's own listener remains loopback by default: `AXIOM_AGENT_LISTEN_ADDR` is rejected unless it is a loopback address or `AXIOM_AGENT_ALLOW_PUBLIC_LISTENER=true` is set (`services/agent/internal/config/config.go:205-222`). This listener is not the dispatch channel of the decision above; it is the Engine→Agent adapter that remains usable for a **self-hosted, loopback-only** deployment.
 
-`agentclient` (`POST /api/v1/agent/operations`, `services/engine/internal/agentclient/client.go:92`) is that self-hosted loopback mode and nothing else. It presents `Authorization`, `X-Credential-Version`, `X-Timestamp` and `X-Nonce` (`client.go:488-496`) and admits `http://` only for a loopback host outside production (`client.go:594-609`). It is kept, tested and retained as a supported configuration; it is not the transport for a hosted deployment.
+`agentclient` (`POST /api/v1/agent/operations`, `services/engine/internal/agentclient/client.go:104`) is that self-hosted loopback mode and nothing else. It signs every operation with `X-Axiom-Signature` and sets `X-Timestamp` and `X-Nonce` on every request, plus `Authorization` and `X-Credential-Version` when a bearer credential exists (`client.go:527-556`), and admits `http://` only for a loopback host outside production (`client.go:677-692`). It is kept, tested and retained as a supported configuration; it is not the transport for a hosted deployment.
 
 Because both endpoints are ordinary HTTPS requests, the existing TLS path on the agent→Engine leg (`services/agent/internal/security/transport`) applies unchanged to poll and result.
 
@@ -41,7 +41,7 @@ The Engine presents **no** credential of its own. There is nothing for it to pre
 
 ### Operation signing: per-agent HMAC-SHA256 key
 
-Every dispatched operation is additionally signed by a key **per agent**. The key is managed by a new Engine package `services/engine/internal/agentkey` — **not yet written** — which stores it encrypted at rest with AES-256-GCM in the existing secret store (`services/engine/internal/security/secrets/box.go:1-2`, `store.go:16`), the same store `appconfig` uses under a scope prefix (`services/engine/internal/secrets/appconfig.go:17-22`), and scopes it `agent:<agentId>/operation-signing-key`. The plaintext key is returned **once**, at registration, and never again; rotation reissues it the same way `agentauth` reissues a credential.
+Every dispatched operation is additionally signed by a key **per agent**. The key is managed by the Engine package `services/engine/internal/agentkey`, which stores it encrypted at rest with AES-256-GCM in the existing secret store (`services/engine/internal/security/secrets/box.go:1-2`, `store.go:16`), the same store `appconfig` uses under a scope prefix (`services/engine/internal/secrets/appconfig.go:17-22`), and scopes it `agent:<agentId>/operation-signing-key` (`ScopePrefix`/`KeyName`, `agentkey.go`). `Service.Issue` generates 32 bytes (`KeySize`) with `crypto/rand` and returns the plaintext key **once** — in the `operationSigningKey` field (lowercase hex) of the register and rotate responses (`services/engine/internal/api/agent.go:132`, `agent.go:176`, `agent.go:221-228`) — and never again; rotation reissues it the same way `agentauth` reissues a credential. `Service.SigningKey` decrypts it for signing only, and `agentclient` signs the exact bytes it sends (`services/engine/internal/agentclient/client.go:460`, `client.go:527-556`).
 
 Canonical signing form, joined by `\n`:
 
