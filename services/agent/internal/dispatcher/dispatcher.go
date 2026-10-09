@@ -131,6 +131,35 @@ type Adapter interface {
 // dispatcher surfaces that code verbatim in Result.ErrorCode.
 type ErrorCoder interface{ ErrorCode() string }
 
+// ScopedAdapter is an Adapter that needs the operation's deployment scope
+// (deployment and server identity) to act on the runtime — the Docker adapter
+// stamps canonical ownership labels from it, and the Traefik adapter names the
+// per-deployment dynamic file from it. The closed operation payloads carry
+// neither, so Dispatch resolves a per-operation view through this optional
+// interface before executing.
+//
+// It is additive: an Adapter that does not implement it is used as-is, exactly
+// as before.
+type ScopedAdapter interface {
+	Adapter
+	// WithScope returns the adapter bound to one operation's scope. The
+	// returned value must be safe for concurrent use and must not mutate the
+	// receiver.
+	WithScope(deploymentID, serverID string) Adapter
+}
+
+// scopedAdapter resolves the per-operation adapter when the configured one
+// needs a deployment scope.
+func scopedAdapter(a Adapter, op protocol.Operation) Adapter {
+	if a == nil {
+		return nil
+	}
+	if s, ok := a.(ScopedAdapter); ok {
+		return s.WithScope(op.DeploymentID, op.ServerID)
+	}
+	return a
+}
+
 // Timeouts bounds each operation's execution. Zero values fall back to the
 // defaults; VERIFY always uses the payload's timeoutSeconds (validated 1..600
 // by the protocol).
@@ -338,7 +367,7 @@ func (d *Dispatcher) execute(ctx context.Context, op protocol.Operation) protoco
 		DeploymentID: op.DeploymentID,
 		FinishedAt:   now,
 	}
-	adapter := d.adapter()
+	adapter := scopedAdapter(d.adapter(), op)
 	if adapter == nil {
 		res.Success = false
 		res.ErrorCode = CodeInternal

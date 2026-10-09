@@ -66,6 +66,11 @@ func (e *Error) Error() string {
 
 func (e *Error) Unwrap() error { return e.Cause }
 
+// ErrorCode implements the dispatcher's ErrorCoder contract so this adapter's
+// stable code (RUNTIME_IMAGE_MISSING, RUNTIME_NOT_MANAGED, …) surfaces verbatim
+// in Result.ErrorCode instead of being degraded to INTERNAL by classifyError.
+func (e *Error) ErrorCode() string { return e.Code }
+
 // IsNotManaged reports whether err was caused by ErrNotManaged.
 func IsNotManaged(err error) bool {
 	return errors.Is(err, ErrNotManaged)
@@ -488,6 +493,45 @@ func (a *Adapter) Cleanup(ctx context.Context, deploymentID string) error {
 		}
 	}
 	return nil
+}
+
+// ListManaged returns every Axiom-managed container on the host, whatever its
+// deployment. It is the read surface startup reconciliation (#82) needs; the
+// listing filters on the canonical managed label and each container is reported
+// with its ownership labels so callers can decide per-deployment.
+func (a *Adapter) ListManaged(ctx context.Context) ([]ContainerInfo, error) {
+	ctx, cancel := a.withTimeout(ctx)
+	defer cancel()
+	out, exit, err := a.runner().Run(ctx, "ps", "-a",
+		"--filter", "label="+ownership.LabelManaged+"="+ownership.ManagedTrue,
+		"--format", "{{.Names}}")
+	if ctx.Err() != nil {
+		return nil, &Error{Code: CodeInterrupted, Message: "managed listing interrupted", Cause: ctx.Err()}
+	}
+	if exit != 0 {
+		return nil, &Error{Code: CodeDockerFailed, Message: fmt.Sprintf("docker ps exited with code %d", exit), ExitCode: exit, Log: out}
+	}
+	if err != nil {
+		return nil, &Error{Code: CodeDockerFailed, Message: "docker ps failed to start", Cause: err, Log: out}
+	}
+	names := strings.Split(out, "\n")
+	infos := make([]ContainerInfo, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		info, err := a.Inspect(ctx, name)
+		if err != nil {
+			if isNotFound(err) {
+				continue // gone between the listing and the inspection
+			}
+			return nil, err // docker failure: report, never guess
+		}
+		infos = append(infos, info)
+	}
+	sort.Slice(infos, func(i, j int) bool { return infos[i].Name < infos[j].Name })
+	return infos, nil
 }
 
 // verifyManaged enforces the ownership boundary for every mutation: the
