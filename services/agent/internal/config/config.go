@@ -235,6 +235,10 @@ func (c Config) IdentityPath() string { return filepath.Join(c.DataRoot, "identi
 // CredentialPath is the persisted agent credential file.
 func (c Config) CredentialPath() string { return filepath.Join(c.DataRoot, "credential.json") }
 
+// OperationKeyPath is the persisted Engine→Agent operation signing key
+// (ADR-0008). It is written 0600 like every other state file.
+func (c Config) OperationKeyPath() string { return filepath.Join(c.DataRoot, "operation-key.json") }
+
 // StatePath is the durable operation state log.
 func (c Config) StatePath() string { return filepath.Join(c.DataRoot, "state.jsonl") }
 

@@ -40,10 +40,11 @@ func newHeartbeatHarness(t *testing.T) *heartbeatHarness {
 		health:      map[string]server.Health{},
 	}
 	handler := New(Deps{
-		Log:     slog.New(slog.NewJSONHandler(buf, nil)),
-		Auth:    NewTokenAuthenticator(token, Principal{UserID: "usr_1", Name: "Jane"}),
-		Servers: hs,
-		Agents:  agents,
+		Log:       slog.New(slog.NewJSONHandler(buf, nil)),
+		Auth:      NewTokenAuthenticator(token, Principal{UserID: "usr_1", Name: "Jane"}),
+		Servers:   hs,
+		Agents:    agents,
+		AgentKeys: fakeAgentKeys{},
 	})
 	return &heartbeatHarness{
 		agentHarness: &agentHarness{

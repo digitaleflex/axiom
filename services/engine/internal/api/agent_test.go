@@ -2,14 +2,50 @@ package api
 
 import (
 	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/agentauth"
+	"github.com/digitaleflex/axiom/services/engine/internal/agentkey"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
 )
+
+// fakeAgentKeys issues fresh operation signing keys (ADR-0008) without the
+// secret store, mirroring agentkey.Service: one new key per issue, so rotation
+// is observable in the register/rotate responses.
+type fakeAgentKeys struct{}
+
+func (fakeAgentKeys) Issue(_ context.Context, _ string) (agentkey.Key, error) {
+	key := make([]byte, agentkey.KeySize)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	return agentkey.Key(key), nil
+}
+
+// operationSigningKey asserts the response field: lowercase hex of exactly
+// KeySize bytes, returned exactly once, never empty. The plaintext is the
+// agent's to keep — the value is returned here so tests can compare rotation.
+func assertOperationSigningKey(t *testing.T, body map[string]any) string {
+	t.Helper()
+	raw, _ := body["operationSigningKey"].(string)
+	if raw == "" {
+		t.Fatalf("registration response carries no operationSigningKey: %v", body)
+	}
+	if strings.ToLower(raw) != raw {
+		t.Fatalf("operationSigningKey is not lowercase hex: %q", raw)
+	}
+	key, err := hex.DecodeString(raw)
+	if err != nil || len(key) != agentkey.KeySize {
+		t.Fatalf("operationSigningKey = %q, want %d bytes of lowercase hex", raw, agentkey.KeySize)
+	}
+	return raw
+}
 
 type agentHarness struct {
 	*harness
@@ -29,10 +65,11 @@ func newAgentHarness(t *testing.T, buf *bytes.Buffer) *agentHarness {
 		agentauth.WithServerLookup(agentauth.StaticServers(servers)),
 	)
 	handler := New(Deps{
-		Log:     slog.New(slog.NewJSONHandler(buf, nil)),
-		Auth:    NewTokenAuthenticator(token, Principal{UserID: "usr_1", Name: "Jane"}),
-		Servers: &fakeServers{items: []server.Record{{ID: "srv_pending", OwnerID: "usr_1", Status: server.StatusPending}}},
-		Agents:  agents,
+		Log:       slog.New(slog.NewJSONHandler(buf, nil)),
+		Auth:      NewTokenAuthenticator(token, Principal{UserID: "usr_1", Name: "Jane"}),
+		Servers:   &fakeServers{items: []server.Record{{ID: "srv_pending", OwnerID: "usr_1", Status: server.StatusPending}}},
+		Agents:    agents,
+		AgentKeys: fakeAgentKeys{},
 	})
 	return &agentHarness{
 		harness: &harness{t: t, handler: handler},
@@ -97,6 +134,9 @@ func TestAgentRegisterAndStatus(t *testing.T) {
 	if r.body["serverId"] != "srv_pending" || r.body["credentialVersion"].(float64) != 1 {
 		t.Fatalf("register binding = %v", r.body)
 	}
+	// ADR-0008: the register response carries the operation signing key,
+	// lowercase hex, exactly once.
+	assertOperationSigningKey(t, r.body)
 
 	// Status by agent and by server.
 	r = h.do("GET", "/api/v1/agent/status?agentId="+agentID, nil, nil)
@@ -169,12 +209,19 @@ func TestAgentRotate(t *testing.T) {
 	reg := h.register("srv_pending", h.bootstrap("srv_pending"))
 	agentID, _ := reg.body["agentId"].(string)
 	credential, _ := reg.body["credential"].(string)
+	firstKey := assertOperationSigningKey(t, reg.body)
 
 	r := h.do("POST", "/api/v1/agent/rotate", nil, rotateHeaders(agentID, credential, "nonce-1", time.Now().UTC()))
 	expect(t, r, 200, "")
 	next, _ := r.body["credential"].(string)
 	if next == "" || next == credential || r.body["credentialVersion"].(float64) != 2 {
 		t.Fatalf("rotate = %v", r.body)
+	}
+	// ADR-0008: rotation reissues the operation signing key the way it
+	// reissues the credential.
+	nextKey := assertOperationSigningKey(t, r.body)
+	if nextKey == firstKey {
+		t.Fatal("rotation must reissue the operation signing key")
 	}
 
 	// Missing credential/identity.
@@ -232,6 +279,12 @@ func TestAgentCredentialsNeverLogged(t *testing.T) {
 	}
 	if strings.Contains(h.logBuf.String(), credential) {
 		t.Fatalf("credential leaked into logs: %s", h.logBuf.String())
+	}
+	// The operation signing key is plaintext exactly once, in the response —
+	// never in the logs (ADR-0008).
+	signingKey := assertOperationSigningKey(t, reg.body)
+	if strings.Contains(h.logBuf.String(), signingKey) {
+		t.Fatalf("operation signing key leaked into logs: %s", h.logBuf.String())
 	}
 }
 

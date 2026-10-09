@@ -2,17 +2,22 @@ package agentclient
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/digitaleflex/axiom/services/engine/internal/agentkey"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/executor"
 	"github.com/digitaleflex/axiom/services/engine/internal/health"
@@ -27,6 +32,8 @@ type fakeAgent struct {
 	mu    sync.Mutex
 	ops   []map[string]any
 	heads []http.Header
+	// raws are the exact body bytes received, for signature binding checks.
+	raws [][]byte
 	// status and body are the answer; empty body means a success result.
 	status  int
 	body    string
@@ -48,6 +55,7 @@ func newFakeAgent(t *testing.T) *fakeAgent {
 		a.mu.Lock()
 		a.ops = append(a.ops, op)
 		a.heads = append(a.heads, r.Header.Clone())
+		a.raws = append(a.raws, raw)
 		status, body := a.status, a.body
 		a.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
@@ -70,6 +78,14 @@ func (a *fakeAgent) received() ([]map[string]any, []http.Header) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return append([]map[string]any(nil), a.ops...), append([]http.Header(nil), a.heads...)
+}
+
+// receivedSigned returns the exact headers and body bytes every request
+// carried, for signature binding checks.
+func (a *fakeAgent) receivedSigned() ([]http.Header, [][]byte) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]http.Header(nil), a.heads...), append([][]byte(nil), a.raws...)
 }
 
 type fakeServers struct{ rec server.Record }
@@ -112,12 +128,44 @@ func (staticCred) Credential(context.Context, string) (Credential, error) {
 	return Credential{Token: "ac_test", Version: 3}, nil
 }
 
+// Golden vector of the ADR-0008 operation signature, byte-identical with the
+// one pinned in internal/agentkey and on the agent side. Fixed inputs, fixed
+// expected output: any divergence in the canonical form or the HMAC breaks
+// these constants.
+const (
+	goldenKey       = "axiom-test-key" // raw ASCII bytes, not a production key
+	goldenMethod    = "POST"
+	goldenPath      = "/api/v1/agent/operations"
+	goldenAgentID   = "agt_0123456789abcdef01234567"
+	goldenVersion   = 2
+	goldenTimestamp = "2026-10-09T12:00:00Z"
+	goldenNonce     = "00112233445566778899aabbccddeeff"
+	goldenBody      = "{}"
+	goldenSignature = "f6adba7b8e7e84811dc101769c40914d5b2ab7a9411ebed636b45925b909b6db"
+)
+
+// staticKeys is a fixed SigningKeys source: one agent identity, one key, or a
+// failure.
+type staticKeys struct {
+	agentID string
+	key     []byte
+	err     error
+}
+
+func (s staticKeys) SigningKey(context.Context, string) (string, []byte, error) {
+	if s.err != nil {
+		return "", nil, s.err
+	}
+	return s.agentID, s.key, nil
+}
+
 func newClient(t *testing.T, a *fakeAgent) *Client {
 	t.Helper()
 	return &Client{
 		Servers:      fakeServers{rec: server.Record{ID: "srv_1", Address: "203.0.113.10"}},
 		Applications: scopedApplications{},
 		Credentials:  staticCred{},
+		SigningKeys:  staticKeys{agentID: goldenAgentID, key: []byte(goldenKey)},
 		Endpoint:     func(context.Context, string, string) (string, error) { return a.url(), nil },
 		Production:   false,
 		Log:          discardLogger(),
@@ -175,6 +223,9 @@ func TestCreateRuntimeDispatchesProtocolOperation(t *testing.T) {
 	if h.Get("Content-Type") != "application/json" {
 		t.Fatalf("content type = %q", h.Get("Content-Type"))
 	}
+	// Every operation carries the per-agent signature (ADR-0008).
+	headsSigned, raws := a.receivedSigned()
+	assertSignatureBinding(t, headsSigned, raws)
 }
 
 func TestNetworkStartUseClosedOperationSet(t *testing.T) {
@@ -339,18 +390,137 @@ func TestClientAppliesItsOwnDeadline(t *testing.T) {
 	}
 }
 
-func TestNoCredentialFailsClosed(t *testing.T) {
-	a := newFakeAgent(t)
-	c := newClient(t, a)
-	c.Credentials = nil
-	err := c.StartRuntime(context.Background(), executor.StartRequest{
-		Operation: executor.Operation{OperationID: "op_d_START_1", DeploymentID: "dep_1", ServerID: "srv_1"}, Container: "c"})
-	var e *Error
-	if !errors.As(err, &e) || e.Code != CodeNoCredential || !errors.Is(err, ErrNoCredential) {
-		t.Fatalf("err = %v, want %s", err, CodeNoCredential)
+// TestOutboundSignatureGoldenVector is the wire-contract pin on the client
+// side (mandatory golden vector, ADR-0008): the exact X-Axiom-Signature value
+// the client computes for fixed request material, byte-identical with
+// internal/agentkey and the agent verifier.
+func TestOutboundSignatureGoldenVector(t *testing.T) {
+	if DefaultOperationPath != goldenPath {
+		t.Fatalf("operation path = %q, want %q", DefaultOperationPath, goldenPath)
 	}
-	if ops, _ := a.received(); len(ops) != 0 {
-		t.Fatal("no operation may be dispatched without a credential")
+	got := signature([]byte(goldenKey), goldenMethod, goldenPath, goldenAgentID, goldenVersion,
+		goldenTimestamp, goldenNonce, []byte(goldenBody))
+	if got != "v1="+goldenSignature {
+		t.Fatalf("X-Axiom-Signature = %q, want v1=%s", got, goldenSignature)
+	}
+}
+
+// verifySignature recomputes the HMAC-SHA256 over the canonical form built
+// from the captured request material and compares it with the header, exactly
+// the way the agent verifier does (services/agent/internal/security/
+// operationkey). It is deliberately NOT the client's own signing helper: a
+// broken signer must fail this check, and the golden vector pins the math.
+func verifySignature(t *testing.T, h http.Header, body []byte) {
+	t.Helper()
+	got := h.Get("X-Axiom-Signature")
+	canonical := strings.Join([]string{
+		"AXIOM-HMAC-V1",
+		goldenMethod,
+		goldenPath,
+		goldenAgentID,
+		strconv.Itoa(goldenVersion),
+		h.Get("X-Timestamp"),
+		h.Get("X-Nonce"),
+		agentkey.BodyDigest(body),
+	}, "\n")
+	mac := hmac.New(sha256.New, []byte(goldenKey))
+	mac.Write([]byte(canonical))
+	want := "v1=" + hex.EncodeToString(mac.Sum(nil))
+	if got != want {
+		t.Fatalf("signature = %q, want %q (bound to the exact sent bytes)", got, want)
+	}
+}
+
+// assertSignatureBinding proves the signature covers the exact bytes sent: it
+// recomputes the HMAC from the received request material — raw body, method,
+// path, header values as they arrived — and compares it with the header. A
+// client that signed anything other than what it put on the wire fails here.
+func assertSignatureBinding(t *testing.T, heads []http.Header, raws [][]byte) {
+	t.Helper()
+	if len(heads) == 0 {
+		t.Fatal("no request captured")
+	}
+	for i := range heads {
+		h := heads[i]
+		if !strings.HasPrefix(h.Get("X-Axiom-Signature"), "v1=") {
+			t.Fatalf("request %d: X-Axiom-Signature = %q", i, h.Get("X-Axiom-Signature"))
+		}
+		if h.Get("X-Timestamp") == "" || h.Get("X-Nonce") == "" {
+			t.Fatalf("request %d: timestamp and nonce must be signed and sent: %v", i, h)
+		}
+		verifySignature(t, h, raws[i])
+	}
+}
+
+// TestNoSigningKeyFailsClosed is the fail-closed half of ADR-0008: without
+// signing material no operation is put on the wire — an unsigned operation is
+// refused by the agent, so the Engine refuses it first.
+func TestNoSigningKeyFailsClosed(t *testing.T) {
+	cases := []struct {
+		name string
+		keys SigningKeys
+	}{
+		{"no signer", nil},
+		{"unknown agent", staticKeys{err: errors.New("no key stored for the agent")}},
+		{"empty key", staticKeys{agentID: goldenAgentID, key: nil}},
+		{"empty agent id", staticKeys{agentID: "", key: []byte(goldenKey)}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newFakeAgent(t)
+			c := newClient(t, a)
+			c.SigningKeys = tc.keys
+			err := c.StartRuntime(context.Background(), executor.StartRequest{
+				Operation: executor.Operation{OperationID: "op_d_START_1", DeploymentID: "dep_1", ServerID: "srv_1"}, Container: "c"})
+			var e *Error
+			if !errors.As(err, &e) || e.Code != CodeNoCredential || !errors.Is(err, ErrNoCredential) {
+				t.Fatalf("err = %v, want %s", err, CodeNoCredential)
+			}
+			if ops, _ := a.received(); len(ops) != 0 {
+				t.Fatal("no operation may be dispatched without signing material")
+			}
+		})
+	}
+}
+
+// failingCred refuses to produce a bearer credential.
+type failingCred struct{}
+
+func (failingCred) Credential(context.Context, string) (Credential, error) {
+	return Credential{}, errors.New("no bearer credential")
+}
+
+// emptyCred produces no token.
+type emptyCred struct{}
+
+func (emptyCred) Credential(context.Context, string) (Credential, error) {
+	return Credential{}, nil
+}
+
+// TestBearerCredentialIsOptional is the non-blocking credential half of
+// ADR-0008: the Engine presents no credential of its own, so an absent or
+// failing bearer provider must not block the request — the per-agent
+// signature is what authenticates the leg.
+func TestBearerCredentialIsOptional(t *testing.T) {
+	for name, creds := range map[string]CredentialProvider{
+		"no provider":       nil,
+		"failing provider":  failingCred{},
+		"provider no token": emptyCred{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := newFakeAgent(t)
+			c := newClient(t, a)
+			c.Credentials = creds
+			if err := c.StartRuntime(context.Background(), executor.StartRequest{
+				Operation: executor.Operation{OperationID: "op_d_START_1", DeploymentID: "dep_1", ServerID: "srv_1"}, Container: "c"}); err != nil {
+				t.Fatalf("the request must not fail without a bearer credential: %v", err)
+			}
+			headsSigned, raws := a.receivedSigned()
+			if got := headsSigned[0].Get("Authorization"); got != "" {
+				t.Fatalf("Authorization = %q, want none", got)
+			}
+			assertSignatureBinding(t, headsSigned, raws)
+		})
 	}
 }
 

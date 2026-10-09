@@ -1,14 +1,24 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/digitaleflex/axiom/services/engine/internal/agentauth"
+	"github.com/digitaleflex/axiom/services/engine/internal/agentkey"
 	"github.com/digitaleflex/axiom/services/engine/internal/authz"
 )
+
+// AgentKeys issues the per-agent operation signing key (ADR-0008). The
+// plaintext key is returned to the agent exactly once — at registration and at
+// every rotation, in the "operationSigningKey" field (lowercase hex) — and
+// must never be logged. *agentkey.Service implements it.
+type AgentKeys interface {
+	Issue(ctx context.Context, agentID string) (agentkey.Key, error)
+}
 
 // agentPublicPaths are agent-facing endpoints that authenticate with the
 // agent's own bootstrap token or credential inside the handler, not with the
@@ -68,7 +78,10 @@ func (a *API) bootstrapServer(w http.ResponseWriter, r *http.Request) (err error
 // and binds the agent identity to its server. Agent-facing: it does not use the
 // user authenticator.
 func (a *API) agentRegister(w http.ResponseWriter, r *http.Request) error {
-	if a.agents == nil {
+	// The registration is refused before anything is consumed when the
+	// operation signing key store is unwired: an agent registered without a
+	// key could never accept a dispatched operation (ADR-0008).
+	if a.agents == nil || a.agentKeys == nil {
 		return errUnavailable
 	}
 	token, ok := bearerToken(r)
@@ -112,7 +125,15 @@ func (a *API) agentRegister(w http.ResponseWriter, r *http.Request) error {
 	case err != nil:
 		return err
 	}
-	writeJSON(w, http.StatusCreated, registrationPayload(reg))
+	// The operation signing key is issued with the credential and returned
+	// exactly once. If issuance fails the registration answers an error: the
+	// single-use bootstrap token is spent, and a fresh one recovers —
+	// re-registration keeps the agent identity and reissues everything.
+	key, err := a.agentKeys.Issue(r.Context(), reg.AgentID)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusCreated, registrationPayload(reg, key))
 	return nil
 }
 
@@ -121,7 +142,7 @@ func (a *API) agentRegister(w http.ResponseWriter, r *http.Request) error {
 // agentRotate exchanges a valid current credential for the next one. The old
 // credential stays valid for the grace window. Agent-facing.
 func (a *API) agentRotate(w http.ResponseWriter, r *http.Request) error {
-	if a.agents == nil {
+	if a.agents == nil || a.agentKeys == nil {
 		return errUnavailable
 	}
 	agentID := r.Header.Get("X-Agent-ID")
@@ -150,7 +171,13 @@ func (a *API) agentRotate(w http.ResponseWriter, r *http.Request) error {
 	case err != nil:
 		return err
 	}
-	writeJSON(w, http.StatusOK, registrationPayload(reg))
+	// Rotation reissues the operation signing key the way it reissues the
+	// credential (ADR-0008): a fresh key is returned exactly once.
+	key, err := a.agentKeys.Issue(r.Context(), reg.AgentID)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, registrationPayload(reg, key))
 	return nil
 }
 
@@ -189,14 +216,16 @@ func (a *API) agentStatus(w http.ResponseWriter, r *http.Request) error {
 // --- helpers ------------------------------------------------------------------
 
 // registrationPayload renders a redeem/rotate response. It contains the
-// plaintext credential and must never be logged.
-func registrationPayload(reg agentauth.Registration) map[string]any {
+// plaintext credential and the plaintext operation signing key (lowercase
+// hex, ADR-0008) and must never be logged: both are returned exactly once.
+func registrationPayload(reg agentauth.Registration, operationSigningKey agentkey.Key) map[string]any {
 	return map[string]any{
 		"agentId":                  reg.AgentID,
 		"serverId":                 reg.ServerID,
 		"credential":               reg.Credential,
 		"credentialVersion":        reg.CredentialVersion,
 		"credentialExpiresAt":      reg.CredentialExpiresAt.UTC().Format(time.RFC3339),
+		"operationSigningKey":      operationSigningKey.Hex(),
 		"negotiated":               reg.Negotiated,
 		"heartbeatIntervalSeconds": reg.HeartbeatIntervalSeconds,
 	}

@@ -7,8 +7,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/digitaleflex/axiom/services/agent/internal/security/operationkey"
 )
 
 func sampleCredential() Credential {
@@ -204,5 +207,95 @@ func TestClientRotateSwapsCredential(t *testing.T) {
 	}
 	if prev, ok := s.Previous(time.Now().UTC()); !ok || prev.Token != old.Token {
 		t.Fatalf("old credential must remain in grace: %+v ok=%v", prev, ok)
+	}
+}
+
+// TestClientRotatePersistsOperationSigningKey covers ADR-0008 C6 on the
+// rotation leg: a rotate response carrying "operationSigningKey" (lowercase
+// hex, 32 bytes) has it persisted 0600 via operationkey before the rotated
+// credential is swapped in.
+func TestClientRotatePersistsOperationSigningKey(t *testing.T) {
+	newKeyHex := strings.Repeat("ab", 32)
+	next := sampleCredential()
+	next.Token = "ac_" + "0123abcd"
+	next.Version = 2
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"agentId":             next.AgentID,
+			"serverId":            next.ServerID,
+			"credential":          next.Token,
+			"credentialVersion":   next.Version,
+			"credentialExpiresAt": next.ExpiresAt.Format(time.RFC3339),
+			"operationSigningKey": newKeyHex,
+		})
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	s := NewStore(filepath.Join(dir, "credential.json"))
+	if err := s.Save(sampleCredential()); err != nil {
+		t.Fatal(err)
+	}
+	opKeys := operationkey.NewStore(filepath.Join(dir, "operation-key.json"))
+	client := NewClient(srv.URL, s)
+	client.OperationKeys = opKeys
+
+	if _, err := client.Rotate(context.Background()); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	got, ok := opKeys.Current()
+	if !ok || got.Hex() != newKeyHex {
+		t.Fatalf("persisted operation key = %x ok=%v, want %s", []byte(got), ok, newKeyHex)
+	}
+	info, err := os.Stat(opKeys.Path())
+	if err != nil {
+		t.Fatalf("key file: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("operation key file perm = %o, want 600", perm)
+	}
+
+	// A rotate response without the field leaves the stored key untouched.
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"agentId": next.AgentID, "serverId": next.ServerID,
+			"credential": next.Token, "credentialVersion": 3,
+			"credentialExpiresAt": next.ExpiresAt.Format(time.RFC3339),
+		})
+	}))
+	defer srv2.Close()
+	client2 := NewClient(srv2.URL, s)
+	client2.OperationKeys = opKeys
+	if _, err := client2.Rotate(context.Background()); err != nil {
+		t.Fatalf("rotate without key: %v", err)
+	}
+	if still, ok := opKeys.Current(); !ok || still.Hex() != newKeyHex {
+		t.Fatalf("stored key after key-less rotate = %x ok=%v, want %s", []byte(still), ok, newKeyHex)
+	}
+
+	// Fail closed: a key with no store wired is never dropped silently.
+	client3 := NewClient(srv.URL, s)
+	if _, err := client3.Rotate(context.Background()); err == nil {
+		t.Fatal("rotate must fail closed when the operation key has nowhere to go")
+	}
+
+	// Fail closed: a malformed key is refused, never normalized.
+	srv3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"agentId": next.AgentID, "serverId": next.ServerID,
+			"credential": next.Token, "credentialVersion": 4,
+			"credentialExpiresAt": next.ExpiresAt.Format(time.RFC3339),
+			"operationSigningKey": "NOT-HEX",
+		})
+	}))
+	defer srv3.Close()
+	client4 := NewClient(srv3.URL, s)
+	client4.OperationKeys = opKeys
+	if _, err := client4.Rotate(context.Background()); err == nil {
+		t.Fatal("rotate must refuse a malformed operation signing key")
 	}
 }

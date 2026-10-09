@@ -19,6 +19,7 @@ import (
 
 	"github.com/digitaleflex/axiom/services/engine/internal/agentauth"
 	"github.com/digitaleflex/axiom/services/engine/internal/agentclient"
+	"github.com/digitaleflex/axiom/services/engine/internal/agentkey"
 	"github.com/digitaleflex/axiom/services/engine/internal/analysis"
 	"github.com/digitaleflex/axiom/services/engine/internal/api"
 	"github.com/digitaleflex/axiom/services/engine/internal/api/sse"
@@ -172,6 +173,10 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 			return string(rec.Status), nil
 		})),
 	)
+	// Per-agent operation signing keys (ADR-0008): the same sealed store as
+	// appconfig, scoped agent:<agentId>/operation-signing-key. The plaintext
+	// key is returned to the agent once, at registration and rotation.
+	var agentKeys *agentkey.Service
 	if cfg.SecretKey != "" {
 		key, err := secrets.ParseKey(cfg.SecretKey)
 		if err != nil {
@@ -181,7 +186,10 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 		if err != nil {
 			return api.Deps{}, err
 		}
-		deps.AppConfig = &appconfig.Service{Store: &secrets.EncryptedStore{DB: db, Box: box}}
+		sealed := &secrets.EncryptedStore{DB: db, Box: box}
+		deps.AppConfig = &appconfig.Service{Store: sealed}
+		agentKeys = &agentkey.Service{Store: sealed}
+		deps.AgentKeys = agentKeys
 	}
 	domainService := &domains.Service{Store: domains.PGStore{DB: db}, Resolver: stdResolver{}}
 	deps.Domains = domainService
@@ -234,7 +242,7 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 	// PENDING record and nothing ever ran: no image was built and no SSE
 	// event was produced. The runner starts in the background so the API
 	// still answers 202 immediately.
-	deps.Runner = newRunner(cfg, log, deps, logStore)
+	deps.Runner = newRunner(cfg, log, deps, logStore, agentKeys)
 	return deps, nil
 }
 
@@ -242,9 +250,14 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 // Dockerfile → image (build), the bounded agent transport (agentclient), and
 // the background runner that owns at most one execution per deployment.
 //
+// agentKeys is the per-agent operation signing key source (ADR-0008); with no
+// secret key configured it stays nil and every runtime step fails closed with
+// AGENT_NO_CREDENTIAL instead of dispatching unsigned work — exactly the
+// behaviour of the former unavailableCredential seam.
+//
 // It returns nil when no database is present (there is nothing to execute
 // against), which leaves the API in its previous persist-only behavior.
-func newRunner(cfg config.Config, log *slog.Logger, deps api.Deps, logStore logs.Appender) *executor.Runner {
+func newRunner(cfg config.Config, log *slog.Logger, deps api.Deps, logStore logs.Appender, agentKeys *agentkey.Service) *executor.Runner {
 	buildEngine := &build.Engine{
 		Workspaces: &workspace.Manager{Root: filepath.Join(os.TempDir(), "axiom-build"), Limits: workspace.DefaultLimits},
 		Builder:    &build.ExecBuilder{Docker: cfg.Docker.Binary},
@@ -252,8 +265,11 @@ func newRunner(cfg config.Config, log *slog.Logger, deps api.Deps, logStore logs
 		LogStore:   logStore,
 	}
 	agent := &agentclient.Client{
-		Servers:     deps.Servers,
-		Credentials: unavailableCredential{},
+		Servers: deps.Servers,
+		// ADR-0008: the Engine→Agent leg is authenticated by a per-agent HMAC
+		// signature, not by a bearer credential. Credentials stays unset and
+		// non-blocking; the signature material comes from agentKeys.
+		SigningKeys: signingKeys{keys: agentKeys, agents: deps.Agents},
 		Production:  cfg.Env == config.EnvProduction,
 		Log:         log,
 	}
@@ -277,22 +293,36 @@ func (b buildEvents) Log(_ context.Context, ev build.LogEvent) {
 	l.Info("build event", "deploymentId", ev.DeploymentID, "level", ev.Level, "step", ev.Step, "message", ev.Message)
 }
 
-// unavailableCredential refuses to produce an Engine→Agent credential.
-//
-// TODO(#77, ADR-0008): the Engine→Agent credential direction does not exist.
-// agentauth (#77) owns the agent→Engine direction and stores credential
-// hashes only, so the Engine has no plaintext it could present to an agent;
-// ADR-0008 still lists "mTLS vs token-based agent credentials" as an open
-// question and the agent exposes no inbound transport (the #75 follow-up).
-//
-// Refusing is the fail-closed choice: a deployment reaching CREATE_RUNTIME
-// fails with the stable code AGENT_NO_CREDENTIAL and the executor records
-// RUNTIME_FAILED, instead of dispatching an unauthenticated operation to a
-// server. The build stage, which needs no agent, still runs for real.
-type unavailableCredential struct{}
+// signingKeys adapts the per-agent operation signing key (agentkey, ADR-0008)
+// and the agent identity registry (agentauth) to the agentclient seam. The
+// AgentID is resolved from the identity bound to the target server — it is
+// never guessed from the operation body — and the key is the one stored for
+// that agent. It fails closed: no key store, no identity or no stored key all
+// mean agentclient.ErrNoCredential, and the operation is refused rather than
+// dispatched unsigned.
+type signingKeys struct {
+	keys   *agentkey.Service
+	agents *agentauth.Service
+}
 
-func (unavailableCredential) Credential(context.Context, string) (agentclient.Credential, error) {
-	return agentclient.Credential{}, agentclient.ErrNoCredential
+func (s signingKeys) SigningKey(ctx context.Context, serverID string) (string, []byte, error) {
+	if s.keys == nil || s.agents == nil {
+		return "", nil, agentclient.ErrNoCredential
+	}
+	res, err := s.agents.Status(ctx, "", serverID)
+	if err != nil {
+		return "", nil, err
+	}
+	if res.AgentID == "" {
+		// No agent identity is bound to this server: there is nobody to sign
+		// for, and the operation must not be dispatched.
+		return "", nil, agentclient.ErrNoCredential
+	}
+	key, err := s.keys.SigningKey(ctx, res.AgentID)
+	if err != nil {
+		return "", nil, err
+	}
+	return res.AgentID, key, nil
 }
 
 // openDatabase connects and migrates. Optional databases degrade to nil with a warning.

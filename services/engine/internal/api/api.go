@@ -63,6 +63,12 @@ type Deps struct {
 	AppConfig    AppConfig
 	// Agents owns agent registration and credential lifecycle (#76/#77).
 	Agents *agentauth.Service
+	// AgentKeys issues the per-agent operation signing key (ADR-0008). The
+	// plaintext key is returned to the agent exactly once, at registration and
+	// at every rotation. A nil service makes the agent registration endpoints
+	// answer 503: an agent registered without a key could never accept a
+	// dispatched operation.
+	AgentKeys AgentKeys
 	// Authz is the authorization boundary (#127). A nil resolver denies
 	// every non-owner action (fail closed).
 	Authz *authz.Resolver
@@ -107,6 +113,7 @@ type API struct {
 	logs         LogStore
 	appConfig    AppConfig
 	agents       *agentauth.Service
+	agentKeys    AgentKeys
 	runner       DeploymentRunner
 	sources      SourceFetcher
 	diagnostics  *diagnostics.Service
@@ -122,6 +129,7 @@ func New(d Deps) http.Handler {
 		log: d.Log, auth: d.Auth, authSvc: d.Sessions, authz: d.Authz, auditSvc: d.Audit, deployments: d.Deployments,
 		applications: d.Applications, servers: d.Servers, github: d.GitHub, repos: d.Repositories, analyses: d.Analyses, plans: d.Plans, domains: d.Domains, logs: d.Logs, appConfig: d.AppConfig,
 		agents:      d.Agents,
+		agentKeys:   d.AgentKeys,
 		runner:      d.Runner,
 		sources:     d.Sources,
 		diagnostics: d.Diagnostics,

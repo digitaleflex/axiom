@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/digitaleflex/axiom/services/agent/internal/protocol"
+	"github.com/digitaleflex/axiom/services/agent/internal/security/operationkey"
 )
 
 // Client presents the agent credential on outgoing Engine requests and rotates
@@ -21,6 +23,11 @@ type Client struct {
 	BaseURL string
 	HTTP    *http.Client
 	Store   *Store
+	// OperationKeys receives the Engine→Agent operation signing key when a
+	// rotate response hands a new one (ADR-0008). It is persisted 0600 before
+	// the rotated credential is swapped in. When nil and the Engine sends a
+	// key, rotation fails closed instead of dropping the key silently.
+	OperationKeys *operationkey.Store
 	// Now and NewNonce are injectable for deterministic tests.
 	Now      func() time.Time
 	NewNonce func() string
@@ -80,6 +87,9 @@ type rotateResponse struct {
 	Credential          string    `json:"credential"`
 	CredentialVersion   int       `json:"credentialVersion"`
 	CredentialExpiresAt time.Time `json:"credentialExpiresAt"`
+	// OperationSigningKey is the new Engine→Agent operation signing key
+	// (lowercase hex, 32 bytes), when the Engine rotates it too (ADR-0008).
+	OperationSigningKey string `json:"operationSigningKey"`
 }
 
 // Rotate asks the Engine for a new credential and stores it atomically,
@@ -104,6 +114,22 @@ func (c *Client) Rotate(ctx context.Context) (Credential, error) {
 	var out rotateResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&out); err != nil {
 		return Credential{}, fmt.Errorf("auth: rotate: decode: %w", err)
+	}
+	// ADR-0008 (C6): when the Engine hands a fresh operation signing key it is
+	// persisted (0600) BEFORE the rotated credential is swapped in, and it is
+	// never logged. An absent field leaves the stored key untouched; a present
+	// one must be persisted or the rotation fails closed.
+	if out.OperationSigningKey != "" {
+		if c.OperationKeys == nil {
+			return Credential{}, errors.New("auth: rotate: engine sent an operation signing key but no key store is wired")
+		}
+		key, err := operationkey.ParseHex(out.OperationSigningKey)
+		if err != nil {
+			return Credential{}, fmt.Errorf("auth: rotate: %w", err)
+		}
+		if err := c.OperationKeys.Save(key); err != nil {
+			return Credential{}, fmt.Errorf("auth: rotate: persist operation signing key: %w", err)
+		}
 	}
 	next := Credential{
 		Token:     out.Credential,

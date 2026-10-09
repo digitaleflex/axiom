@@ -61,6 +61,9 @@ type fakeEngine struct {
 	agentID  string
 	token    string
 	interval int
+	// operationSigningKey is the ADR-0008 key handed at registration; empty
+	// means the Engine issues none (the agent then stays closed).
+	operationSigningKey string
 
 	mu         sync.Mutex
 	registered []protocol.RegistrationRequest
@@ -93,6 +96,7 @@ func newFakeEngine(t *testing.T) *fakeEngine {
 			"agentId": e.agentID, "serverId": in.ServerID,
 			"credential": e.token, "credentialVersion": 1,
 			"credentialExpiresAt": time.Now().Add(time.Hour).UTC(),
+			"operationSigningKey": e.operationSigningKey,
 			"negotiated":          protocol.Version, "heartbeatIntervalSeconds": e.interval,
 		})
 	})
@@ -409,10 +413,13 @@ func TestDispatchRecordsDurableState(t *testing.T) {
 }
 
 // allowInbound is a test authenticator that accepts everything. It exists only
-// to prove the listener→dispatcher path; production uses refuseInbound.
+// to prove the listener→dispatcher path; production uses refuseInbound (no
+// key) or signedInbound (key registered).
 type allowInbound struct{}
 
 func (allowInbound) Authenticate(*http.Request) error { return nil }
+
+func (allowInbound) VerifyOperation(*http.Request, protocol.Operation, []byte) error { return nil }
 
 const (
 	testOperationID   = "op_dep_0123456789abcdef01234567_CREATE_RUNTIME_1"

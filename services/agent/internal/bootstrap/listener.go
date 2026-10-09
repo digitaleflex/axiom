@@ -26,28 +26,43 @@ var ErrUnauthenticated = errors.New("operation is not authenticated")
 // InboundAuthenticator decides whether an inbound request may reach the
 // dispatcher.
 //
-// #77 / ADR-0008: the Engine→Agent credential direction does not exist yet.
-// agentauth (#77) owns the agent→Engine direction only and stores credential
-// hashes, so the Engine holds no plaintext it could present to an agent. The
-// composition root therefore injects refuseInbound, which authenticates
-// nothing: every operation is rejected before it reaches the dispatcher. This
-// is the same fail-closed stance the Engine takes with AGENT_NO_CREDENTIAL
-// (services/engine/internal/bootstrap/bootstrap.go, unavailableCredential).
+// #77 / ADR-0008 (C6/C8): the Engine→Agent leg is authenticated by an HMAC
+// operation signing key per agent, handed over in clear exactly once at
+// registration (operationkey). The Engine signs every operation it posts
+// (X-Axiom-Signature / X-Timestamp / X-Nonce) and the agent verifies the
+// signature over the exact bytes received before dispatching anything. The
+// seam exists so the composition root can mount either the real verifier or
+// the fail-closed refuseInbound without touching the listener or the
+// dispatcher.
 //
-// The seam exists so #77 can inject a real authenticator without touching the
-// listener or the dispatcher. Implementing one is an architecture decision
-// (mTLS vs token-based agent credentials, ADR-0008) and is deliberately out of
-// scope here.
+// Verification is split in two steps on purpose:
+//
+//   - Authenticate runs BEFORE the body is read and inspects headers only, so
+//     an unauthenticated request can never make the agent allocate a body
+//     buffer (401 before 413);
+//   - VerifyOperation runs AFTER the strict decode and validation, when the
+//     raw bytes and the decoded operation are both available, and checks the
+//     HMAC over the canonical form (401 before Dispatch).
 type InboundAuthenticator interface {
-	// Authenticate returns nil when the request may be dispatched, or
-	// ErrUnauthenticated (or an error wrapping it) when it may not.
+	// Authenticate returns nil when the request carries well-formed signature
+	// headers, or ErrUnauthenticated (or an error wrapping it) when it does
+	// not. It reads only r's headers: never r.Body.
 	Authenticate(r *http.Request) error
+	// VerifyOperation returns nil when the operation's HMAC signature is valid
+	// for the raw bytes received, or ErrUnauthenticated (or an error wrapping
+	// it) when it is not. It is the last gate before Dispatch.
+	VerifyOperation(r *http.Request, op protocol.Operation, raw []byte) error
 }
 
-// refuseInbound is the production authenticator: it authenticates nothing.
+// refuseInbound is the production authenticator when no operation signing key
+// is registered: it authenticates nothing. It implements both steps, so an
+// agent without a key stays closed exactly like it did before ADR-0008 (401
+// before the body is ever read).
 type refuseInbound struct{}
 
-func (refuseInbound) Authenticate(*http.Request) error {
+func (refuseInbound) Authenticate(*http.Request) error { return ErrUnauthenticated }
+
+func (refuseInbound) VerifyOperation(*http.Request, protocol.Operation, []byte) error {
 	return ErrUnauthenticated
 }
 
@@ -55,6 +70,9 @@ func (refuseInbound) Authenticate(*http.Request) error {
 // keeps the listener independently testable.
 type dispatchTarget interface {
 	Dispatch(ctx context.Context, op protocol.Operation) (protocol.Acknowledgement, protocol.Result)
+	// AgentIdentity is the identity the inbound operation must bind to. It is
+	// known independently of the request: never taken from the body.
+	AgentIdentity() protocol.AgentIdentity
 }
 
 // operationsListener is the agent's inbound HTTP surface: the only way the
@@ -127,6 +145,32 @@ func (l *operationsListener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var op protocol.Operation
 	if err := decodeOperation(raw, &op); err != nil {
 		writeError(w, http.StatusBadRequest, protocol.CodeInvalidMessage, "operation body is not a valid protocol operation")
+		return
+	}
+
+	// The envelope, the closed operation set, the operation ID, the deployment
+	// ID and the server-identity binding are validated before the signature is
+	// even consulted; a malformed operation is a 400, never a dispatch. The
+	// dispatcher re-checks all of it before anything executes.
+	if err := op.Validate(time.Now().UTC(), l.target.AgentIdentity()); err != nil {
+		code := protocol.CodeInvalidMessage
+		switch {
+		case errors.Is(err, protocol.ErrStale):
+			code = protocol.CodeStaleMessage
+		case errors.Is(err, protocol.ErrIncompleteScope):
+			code = protocol.CodeIncompleteScope
+		}
+		writeError(w, http.StatusBadRequest, code, "operation body is not a valid protocol operation")
+		return
+	}
+
+	// Signature over the exact bytes received (ADR-0008): the HMAC is checked
+	// last, right before Dispatch, so no unsigned or tampered operation can
+	// reach the dispatcher even when it decodes and validates cleanly.
+	if err := l.auth.VerifyOperation(r, op, raw); err != nil {
+		l.log.Warn("operation refused: invalid signature",
+			"path", r.URL.Path, "remote", r.RemoteAddr)
+		writeError(w, http.StatusUnauthorized, protocol.CodeUnauthorized, "operation refused")
 		return
 	}
 

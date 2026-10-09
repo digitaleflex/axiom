@@ -14,13 +14,16 @@
 // conformance table is docs/architecture/agent-protocol.md §6 and field names
 // are identical on both sides by contract.
 //
-// TODO(#77, ADR-0008): the Engine→Agent credential direction is still an open
-// question ("mTLS vs token-based agent credentials"). agentauth owns the
-// agent→Engine direction only and persists credential HASHES, so the Engine
-// holds no plaintext it could present to an agent. Until that contract exists,
-// CredentialProvider is a seam: the composition root injects a provider that
-// refuses, which fails the runtime step with the stable code
-// AGENT_NO_CREDENTIAL rather than dispatching unauthenticated work.
+// TODO(#77, ADR-0008): the Engine→Agent credential direction is closed. There
+// is exactly one credential in the system (agentauth, agent→Engine only) and
+// the Engine presents none of its own; the leg is authenticated by a per-agent
+// HMAC-SHA256 signature (internal/agentkey, ADR-0008 C5/C7) over the exact
+// request bytes. SigningKeys is the seam that resolves that material: the
+// composition root injects the agentkey-backed provider, and an operation
+// whose agent has no key fails with the stable code AGENT_NO_CREDENTIAL
+// rather than being dispatched unsigned. The bearer Authorization /
+// X-Credential-Version headers remain a compatibility seam on the loopback
+// path and are optional: their absence never blocks a request.
 package agentclient
 
 import (
@@ -38,6 +41,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/digitaleflex/axiom/services/engine/internal/agentkey"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/executor"
 	"github.com/digitaleflex/axiom/services/engine/internal/health"
@@ -48,6 +52,12 @@ import (
 // RUNTIME_FAILED class; API clients branch on that class (API contract §18),
 // never on these codes.
 const (
+	// CodeNoCredential reports that the Engine holds no authentication
+	// material for the target agent. With ADR-0008 that material is the
+	// per-agent operation signing key: the code is returned when no signer is
+	// wired or no key is stored for the agent, and the operation is never
+	// dispatched unsigned. (The bearer credential of the loopback path is
+	// optional and never produces this code.)
 	CodeNoCredential = "AGENT_NO_CREDENTIAL"
 	CodeNotFound     = "AGENT_NOT_FOUND"
 	CodeUnreachable  = "AGENT_UNREACHABLE"
@@ -125,7 +135,10 @@ func (e *Error) Unwrap() error { return e.Cause }
 
 // Sentinels callers may test for.
 var (
-	ErrNoCredential  = errors.New("agentclient: no credential available for the agent")
+	// ErrNoCredential reports that the Engine has no signing material for the
+	// target agent (ADR-0008: the per-agent operation signing key), so the
+	// operation cannot be authenticated and must not be dispatched.
+	ErrNoCredential  = errors.New("agentclient: no operation signing key for the agent")
 	ErrNotFound      = errors.New("agentclient: server not found")
 	ErrTimeout       = errors.New("agentclient: operation timed out")
 	ErrUnreachable   = errors.New("agentclient: agent endpoint unreachable")
@@ -149,7 +162,8 @@ type Applications interface {
 	Get(ctx context.Context, id string) (deployment.Record, error)
 }
 
-// Credential is the Engine's outbound credential for one server's agent.
+// Credential is the Engine's optional outbound bearer credential for one
+// server's agent, kept for the loopback compatibility path.
 type Credential struct {
 	Token string
 	// Version is the credential version the agent should accept, so it can
@@ -157,11 +171,23 @@ type Credential struct {
 	Version int
 }
 
-// CredentialProvider resolves the outbound credential for a server's agent.
-//
-// TODO(#77): no production provider exists — see the package comment.
+// CredentialProvider resolves the optional bearer credential for a server's
+// agent. It is NOT the authentication of this leg (ADR-0008): the per-agent
+// signature is. The interface is kept as a non-blocking seam — an absent or
+// failing provider simply sends no Authorization header, and the request is
+// signed and dispatched all the same.
 type CredentialProvider interface {
 	Credential(ctx context.Context, serverID string) (Credential, error)
+}
+
+// SigningKeys resolves the ADR-0008 signing material of the agent serving a
+// server: the agent's identity and its current HMAC-SHA256 operation signing
+// key. The AgentID is resolved from the identity bound to the server — it is
+// never guessed from the request body. Implemented by the composition root
+// over internal/agentkey and the agentauth identity registry; tests inject
+// fixed material.
+type SigningKeys interface {
+	SigningKey(ctx context.Context, serverID string) (agentID string, key []byte, err error)
 }
 
 // EndpointFunc returns the base URL of the agent serving a server address.
@@ -172,6 +198,11 @@ type EndpointFunc func(ctx context.Context, serverID, address string) (string, e
 type Client struct {
 	Servers     Servers
 	Credentials CredentialProvider
+	// SigningKeys resolves the per-agent operation signing key (ADR-0008).
+	// Required: without it every operation is refused with
+	// AGENT_NO_CREDENTIAL, because the leg is authenticated by the signature
+	// and an unsigned operation is never put on the wire.
+	SigningKeys SigningKeys
 	// Applications resolves the application each deployment belongs to (#145).
 	// Required: without it every operation is refused with
 	// AGENT_NO_APPLICATION.
@@ -421,6 +452,15 @@ func resultError(resp operationResponse) error {
 	return nil
 }
 
+// signature computes the X-Axiom-Signature header value ("v1=<hex>") over one
+// outbound request (ADR-0008 C7). It is the client's single signing path: the
+// canonical form and the HMAC live in internal/agentkey so both sides of the
+// boundary compute byte-identical strings. The arguments are the exact
+// request material — never a copy that could drift from what is sent.
+func signature(key []byte, method, path, agentID string, version int, timestamp, nonce string, body []byte) string {
+	return agentkey.SignaturePrefix + agentkey.Key(key).Sign(agentkey.Canonical(method, path, agentID, version, timestamp, nonce, body))
+}
+
 // exchange posts one operation and returns the agent's answer.
 func (c *Client) exchange(ctx context.Context, s spec) (operationResponse, error) {
 	if ctx == nil {
@@ -446,10 +486,7 @@ func (c *Client) exchange(ctx context.Context, s spec) (operationResponse, error
 		return operationResponse{}, &Error{Code: CodeInternal, Message: "resolve server", Cause: err}
 	}
 
-	cred, err := c.credential(ctx, s.op.ServerID)
-	if err != nil {
-		return operationResponse{}, err
-	}
+	cred := c.credential(ctx, s.op.ServerID)
 
 	// The application scope (#145) is resolved before the message is built: an
 	// operation without it is refused by the agent, so it is never sent.
@@ -489,14 +526,34 @@ func (c *Client) exchange(ctx context.Context, s spec) (operationResponse, error
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	// Bearer credential: optional compatibility seam (ADR-0008). It is the
+	// signature below, not this header, that authenticates the leg.
 	if cred.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+cred.Token)
 	}
 	req.Header.Set("X-Credential-Version", fmt.Sprintf("%d", cred.Version))
-	req.Header.Set("X-Timestamp", c.now().Format(time.RFC3339))
-	if n := c.nonce(); n != "" {
-		req.Header.Set("X-Nonce", n)
+	// X-Timestamp and X-Nonce are set BEFORE the signature is computed, so
+	// the signed values are exactly the sent values (ADR-0008 C7).
+	req.Header.Set(agentkey.TimestampHeader, c.now().Format(time.RFC3339))
+	n := c.nonce()
+	if n == "" {
+		// Never send (or sign) a request without a fresh nonce: it would be
+		// replayable at the agent.
+		return operationResponse{}, &Error{Code: CodeInternal, Message: "a nonce is required to sign the operation"}
 	}
+	req.Header.Set(agentkey.NonceHeader, n)
+
+	// The per-agent HMAC-SHA256 signature (ADR-0008) is computed over the
+	// exact bytes this request carries — method, path, the target's AgentID
+	// (resolved from its registered identity, never from the body), the
+	// protocol version and the header values set above.
+	agentID, key, err := c.signingKey(ctx, s.op.ServerID)
+	if err != nil {
+		return operationResponse{}, err
+	}
+	req.Header.Set(agentkey.SignatureHeader, signature(key,
+		req.Method, req.URL.Path, agentID, ProtocolVersion,
+		req.Header.Get(agentkey.TimestampHeader), req.Header.Get(agentkey.NonceHeader), raw))
 
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
@@ -560,15 +617,41 @@ func (c *Client) applicationID(ctx context.Context, deploymentID string) (string
 	return rec.ApplicationID, nil
 }
 
-func (c *Client) credential(ctx context.Context, serverID string) (Credential, error) {
+// credential resolves the optional bearer credential. The Engine presents no
+// credential of its own (ADR-0008: one credential, agent→Engine only), so
+// this seam is deliberately non-blocking: a nil or failing provider sends no
+// Authorization header and the request is signed and dispatched all the same.
+// This is the least invasive way of closing the old AGENT_NO_CREDENTIAL block
+// — the interface and its callers survive, only the failure mode changes.
+func (c *Client) credential(ctx context.Context, serverID string) Credential {
 	if c.Credentials == nil {
-		return Credential{}, &Error{Code: CodeNoCredential, Message: ErrNoCredential.Error(), Cause: ErrNoCredential}
+		return Credential{}
 	}
 	cred, err := c.Credentials.Credential(ctx, serverID)
-	if err != nil || cred.Token == "" {
-		return Credential{}, &Error{Code: CodeNoCredential, Message: ErrNoCredential.Error(), Cause: err}
+	if err != nil {
+		return Credential{}
 	}
-	return cred, nil
+	return cred
+}
+
+// signingKey resolves the signing material of the agent serving a server: its
+// identity and its per-agent operation signing key. It fails closed — without
+// key material the operation is refused with CodeNoCredential rather than
+// dispatched unsigned (ADR-0008).
+func (c *Client) signingKey(ctx context.Context, serverID string) (string, []byte, error) {
+	if c.SigningKeys == nil {
+		return "", nil, &Error{Code: CodeNoCredential, Message: ErrNoCredential.Error(), Cause: ErrNoCredential}
+	}
+	agentID, key, err := c.SigningKeys.SigningKey(ctx, serverID)
+	switch {
+	case err != nil:
+		// The sentinel stays in the chain so callers can branch on
+		// ErrNoCredential whatever the provider failed with.
+		return "", nil, &Error{Code: CodeNoCredential, Message: ErrNoCredential.Error(), Cause: fmt.Errorf("%w: %w", ErrNoCredential, err)}
+	case agentID == "" || len(key) == 0:
+		return "", nil, &Error{Code: CodeNoCredential, Message: ErrNoCredential.Error(), Cause: ErrNoCredential}
+	}
+	return agentID, key, nil
 }
 
 // endpoint resolves and validates the agent base URL.

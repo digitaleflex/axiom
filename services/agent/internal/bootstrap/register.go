@@ -13,6 +13,7 @@ import (
 	"github.com/digitaleflex/axiom/services/agent/internal/identity"
 	"github.com/digitaleflex/axiom/services/agent/internal/protocol"
 	"github.com/digitaleflex/axiom/services/agent/internal/security/auth"
+	"github.com/digitaleflex/axiom/services/agent/internal/security/operationkey"
 	"github.com/digitaleflex/axiom/services/agent/internal/security/transport"
 )
 
@@ -20,8 +21,8 @@ import (
 const registerTimeout = 30 * time.Second
 
 // register performs the agent→Engine registration exchange (#76) when the agent
-// has no issued identity or no usable credential yet, and persists both the
-// identity and the credential.
+// has no issued identity or no usable credential yet, and persists the
+// identity, the credential and the operation signing key (ADR-0008).
 //
 // The bootstrap credential (config.Token) rides on the transport
 // (Authorization), never in the body. When the agent is already registered and
@@ -94,6 +95,7 @@ func (a *App) register(ctx context.Context) error {
 		Credential               string    `json:"credential"`
 		CredentialVersion        int       `json:"credentialVersion"`
 		CredentialExpiresAt      time.Time `json:"credentialExpiresAt"`
+		OperationSigningKey      string    `json:"operationSigningKey"`
 		Negotiated               int       `json:"negotiated"`
 		HeartbeatIntervalSeconds int       `json:"heartbeatIntervalSeconds"`
 	}
@@ -127,11 +129,28 @@ func (a *App) register(ctx context.Context) error {
 	if err := a.Credentials.Save(issued); err != nil {
 		return fmt.Errorf("persist issued credential: %w", err)
 	}
+	// ADR-0008 (C6): the Engine hands the operation signing key exactly once,
+	// in clear, at registration. It is persisted (0600) BEFORE the inbound
+	// authenticator is built below, and it is never logged. An absent field
+	// keeps the agent closed (refuseInbound).
+	if out.OperationSigningKey != "" {
+		key, err := operationkey.ParseHex(out.OperationSigningKey)
+		if err != nil {
+			return fmt.Errorf("engine issued a malformed operation signing key: %w", err)
+		}
+		if err := a.OperationKeys.Save(key); err != nil {
+			return fmt.Errorf("persist operation signing key: %w", err)
+		}
+	}
 	registered := identity.Identity{AgentID: out.AgentID, ServerID: out.ServerID, Registered: true}
 	if err := a.Identity.Save(registered); err != nil {
 		return fmt.Errorf("persist registered identity: %w", err)
 	}
 	a.IdentityID = registered
+
+	// The inbound authenticator is built only now: both the operation signing
+	// key and the issued agent ID it binds to are persisted first (ADR-0008).
+	a.installInboundAuth()
 
 	// The heartbeat loop needs an issued identity; start it now that the agent
 	// has one, using the interval the Engine negotiated.
@@ -146,6 +165,7 @@ func (a *App) register(ctx context.Context) error {
 	}
 	a.log.Info("agent registered", "agentId", out.AgentID, "serverId", out.ServerID,
 		"credentialVersion", out.CredentialVersion, "negotiated", out.Negotiated,
+		"operationKeyIssued", out.OperationSigningKey != "",
 		"heartbeatIntervalSeconds", out.HeartbeatIntervalSeconds)
 	return nil
 }

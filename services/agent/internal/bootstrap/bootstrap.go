@@ -9,8 +9,9 @@
 //
 // Mount order (each package is constructed on the line noted in its field doc):
 //
-//	identity → state → ownership → capabilities → recovery → health → heartbeat
-//	→ docker → traefik → dispatcher → inbound listener
+//	identity → credentials → operation key → state → ownership → capabilities
+//	→ recovery → health → heartbeat → docker → traefik → dispatcher
+//	→ inbound listener
 package bootstrap
 
 import (
@@ -36,6 +37,7 @@ import (
 	"github.com/digitaleflex/axiom/services/agent/internal/runtime/docker"
 	"github.com/digitaleflex/axiom/services/agent/internal/runtime/traefik"
 	"github.com/digitaleflex/axiom/services/agent/internal/security/auth"
+	"github.com/digitaleflex/axiom/services/agent/internal/security/operationkey"
 	"github.com/digitaleflex/axiom/services/agent/internal/security/ownership"
 	"github.com/digitaleflex/axiom/services/agent/internal/state"
 )
@@ -56,6 +58,10 @@ type App struct {
 	Identity    *identity.Store
 	IdentityID  identity.Identity
 	Credentials *auth.Store
+	// OperationKeys holds the Engine→Agent operation signing key (ADR-0008):
+	// persisted at registration/rotation (0600) and used to verify the HMAC on
+	// every inbound operation. It is empty until the Engine issues a key.
+	OperationKeys *operationkey.Store
 	// Auth signs every outbound Engine request (registration, heartbeat,
 	// rotation).
 	Auth *auth.Client
@@ -125,6 +131,16 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	}
 	authClient := auth.NewClient(cfg.EngineURL, credStore)
 
+	// 2b. Engine→Agent operation signing key (ADR-0008, C6). Missing is
+	//     normal before the first registration: the inbound listener then
+	//     refuses every operation (refuseInbound). A corrupt file is fatal —
+	//     the agent must not forget the key its operations are signed with.
+	opKeyStore := operationkey.NewStore(cfg.OperationKeyPath())
+	if _, err := opKeyStore.Load(); err != nil && !errors.Is(err, operationkey.ErrNoKey) {
+		return nil, fmt.Errorf("load operation signing key: %w", err)
+	}
+	authClient.OperationKeys = opKeyStore
+
 	// 3. durable operation state (#81). Open performs restart classification:
 	//    anything left RECEIVED/RUNNING becomes INTERRUPTED.
 	stateStore, err := state.Open(cfg.StatePath(), state.WithLogger(log))
@@ -138,13 +154,14 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	}
 
 	app := &App{
-		cfg:         cfg,
-		log:         log,
-		Identity:    idStore,
-		IdentityID:  id,
-		Credentials: credStore,
-		Auth:        authClient,
-		State:       stateStore,
+		cfg:           cfg,
+		log:           log,
+		Identity:      idStore,
+		IdentityID:    id,
+		Credentials:   credStore,
+		OperationKeys: opKeyStore,
+		Auth:          authClient,
+		State:         stateStore,
 	}
 
 	// 4. capabilities (#79).
@@ -207,9 +224,12 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	// 9. logs (#86), bounded and redacted, sourced from the Docker adapter.
 	app.Logs = &logs.Fetcher{Docker: &dockerLogSource{runner: runner}}
 
-	// 10. inbound operation listener. Unauthenticated operations are refused:
-	//     see InboundAuthenticator for why the default authenticator refuses.
-	app.authHeader = refuseInbound{}
+	// 10. inbound operation listener. A registered agent holding an operation
+	//     signing key verifies the HMAC on every operation (signedInbound);
+	//     anything else is refused before the body is read and long before the
+	//     dispatcher (refuseInbound). The key is always persisted before the
+	//     authenticator is built (ADR-0008).
+	app.authHeader = app.inboundAuthenticator()
 	app.Listener = newOperationsListener(cfg.Listener.Path, app.authHeader, app)
 	app.server = &http.Server{
 		Handler:           app.Listener.Handler(),
@@ -240,6 +260,25 @@ func (a *App) AgentIdentity() protocol.AgentIdentity {
 		return protocol.AgentIdentity{AgentID: a.IdentityID.AgentID}
 	}
 	return protocol.AgentIdentity{AgentID: a.IdentityID.AgentID, ServerID: a.cfg.ServerID}
+}
+
+// inboundAuthenticator builds the inbound authenticator from the persisted
+// operation signing key: the real HMAC verifier (signedInbound) when a key is
+// present, the fail-closed refuseInbound when it is not. An agent without a
+// key therefore answers 401 exactly as it did before ADR-0008.
+func (a *App) inboundAuthenticator() InboundAuthenticator {
+	if _, ok := a.OperationKeys.Current(); !ok {
+		return refuseInbound{}
+	}
+	return newSignedInbound(a.OperationKeys, a.IdentityID.AgentID)
+}
+
+// installInboundAuth swaps the inbound authenticator on the listener. It runs
+// only after the operation signing key has been persisted (registration or
+// credential rotation), never before.
+func (a *App) installInboundAuth() {
+	a.authHeader = a.inboundAuthenticator()
+	a.Listener.auth = a.authHeader
 }
 
 // Dispatch executes one operation through the mounted dispatcher, recording it
