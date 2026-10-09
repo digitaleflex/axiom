@@ -24,6 +24,7 @@ func TestIntegrationLifecycle(t *testing.T) {
 
 	a := &Adapter{Timeout: 2 * time.Minute}
 	dep := "dep_0123456789abcdef01234567"
+	app := "app_0123456789abcdef01234567"
 	name := fmt.Sprintf("axiom-it-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
 		// Best-effort force removal; ignore errors (container may be gone).
@@ -38,7 +39,7 @@ func TestIntegrationLifecycle(t *testing.T) {
 	// 2. Create with managed labels, env, limits and a keep-alive command.
 	info, err := a.Create(ctx, CreateSpec{
 		DeploymentID:  dep,
-		ApplicationID: "it-app",
+		ApplicationID: app,
 		ServerID:      "srv_it",
 		Container:     name,
 		ImageRef:      "busybox:latest",
@@ -130,6 +131,7 @@ func TestIntegrationCleanup(t *testing.T) {
 
 	a := &Adapter{Timeout: 2 * time.Minute}
 	dep := "dep_0123456789abcdef01234567"
+	app := "app_0123456789abcdef01234567"
 	managed := fmt.Sprintf("axiom-it-clean-%d", time.Now().UnixNano())
 	foreign := fmt.Sprintf("axiom-it-foreign-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
@@ -138,14 +140,14 @@ func TestIntegrationCleanup(t *testing.T) {
 	})
 
 	for _, spec := range []CreateSpec{
-		{DeploymentID: dep, Container: managed, ImageRef: "busybox:latest", Port: 18081, Command: []string{"sleep", "300"}},
-		{DeploymentID: "dep_ffffffffffffffffffffffff", Container: foreign, ImageRef: "busybox:latest", Port: 18082, Command: []string{"sleep", "300"}},
+		{DeploymentID: dep, ApplicationID: app, Container: managed, ImageRef: "busybox:latest", Port: 18081, Command: []string{"sleep", "300"}},
+		{DeploymentID: "dep_ffffffffffffffffffffffff", ApplicationID: "app_ffffffffffffffffffffffff", Container: foreign, ImageRef: "busybox:latest", Port: 18082, Command: []string{"sleep", "300"}},
 	} {
 		if _, err := a.Create(ctx, spec); err != nil {
 			t.Fatalf("Create %s: %v", spec.Container, err)
 		}
 	}
-	if err := a.Cleanup(ctx, dep); err != nil {
+	if err := a.Cleanup(ctx, app, dep); err != nil {
 		t.Fatalf("Cleanup: %v", err)
 	}
 	if _, err := a.Inspect(ctx, managed); !isNotFound(err) {

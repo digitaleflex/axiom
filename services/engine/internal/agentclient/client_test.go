@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/executor"
 	"github.com/digitaleflex/axiom/services/engine/internal/health"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
@@ -54,7 +55,7 @@ func newFakeAgent(t *testing.T) *fakeAgent {
 			status = http.StatusOK
 		}
 		if body == "" {
-			body = `{"protocol":1,"operationId":"","deploymentId":"","success":true}`
+			body = `{"protocol":2,"operationId":"","deploymentId":"","success":true}`
 		}
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, body)
@@ -80,6 +81,31 @@ func (f fakeServers) Get(_ context.Context, id string) (server.Record, error) {
 	return f.rec, nil
 }
 
+// fakeApplications resolves a deployment to the application it rolls out (#145).
+type fakeApplications struct {
+	rec deployment.Record
+	err error
+}
+
+func (f fakeApplications) Get(_ context.Context, id string) (deployment.Record, error) {
+	if f.err != nil {
+		return deployment.Record{}, f.err
+	}
+	if id != f.rec.ID {
+		return deployment.Record{}, deployment.ErrNotFound
+	}
+	return f.rec, nil
+}
+
+// scopedApplications resolves every deployment id to testApplicationID.
+type scopedApplications struct{}
+
+func (scopedApplications) Get(_ context.Context, id string) (deployment.Record, error) {
+	return deployment.Record{ID: id, ApplicationID: testApplicationID}, nil
+}
+
+const testApplicationID = "app_0123456789abcdef01234567"
+
 type staticCred struct{}
 
 func (staticCred) Credential(context.Context, string) (Credential, error) {
@@ -89,13 +115,14 @@ func (staticCred) Credential(context.Context, string) (Credential, error) {
 func newClient(t *testing.T, a *fakeAgent) *Client {
 	t.Helper()
 	return &Client{
-		Servers:     fakeServers{rec: server.Record{ID: "srv_1", Address: "203.0.113.10"}},
-		Credentials: staticCred{},
-		Endpoint:    func(context.Context, string, string) (string, error) { return a.url(), nil },
-		Production:  false,
-		Log:         discardLogger(),
-		Now:         func() time.Time { return time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC) },
-		NewNonce:    func() string { return "nonce-1" },
+		Servers:      fakeServers{rec: server.Record{ID: "srv_1", Address: "203.0.113.10"}},
+		Applications: scopedApplications{},
+		Credentials:  staticCred{},
+		Endpoint:     func(context.Context, string, string) (string, error) { return a.url(), nil },
+		Production:   false,
+		Log:          discardLogger(),
+		Now:          func() time.Time { return time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC) },
+		NewNonce:     func() string { return "nonce-1" },
 	}
 }
 
@@ -123,8 +150,9 @@ func TestCreateRuntimeDispatchesProtocolOperation(t *testing.T) {
 	got := ops[0]
 	for key, want := range map[string]any{
 		"protocol": float64(ProtocolVersion), "type": "CREATE_RUNTIME",
-		"operationId":  "op_dep_0123456789abcdef01234567_CREATE_RUNTIME_1",
-		"deploymentId": "dep_0123456789abcdef01234567", "serverId": "srv_1",
+		"operationId":   "op_dep_0123456789abcdef01234567_CREATE_RUNTIME_1",
+		"deploymentId":  "dep_0123456789abcdef01234567",
+		"applicationId": testApplicationID, "serverId": "srv_1",
 		"correlationId": "req_0123456789abcdef", "messageId": "op_dep_0123456789abcdef01234567_CREATE_RUNTIME_1",
 		"sentAt": "2026-10-08T12:00:00Z",
 	} {
@@ -185,7 +213,7 @@ func TestNetworkStartUseClosedOperationSet(t *testing.T) {
 
 func TestHealthCheckReturnsReportEvenWhenUnhealthy(t *testing.T) {
 	a := newFakeAgent(t)
-	a.body = `{"protocol":1,"success":false,"errorCode":"HEALTH_CHECK_FAILED","message":"status 503",
+	a.body = `{"protocol":2,"success":false,"errorCode":"HEALTH_CHECK_FAILED","message":"status 503",
 		"health":{"statusCode":503,"latencyMs":91,"attempt":2}}`
 	c := newClient(t, a)
 	report, err := c.HealthCheck(context.Background(), executor.HealthCheckRequest{
@@ -205,7 +233,7 @@ func TestHealthCheckReturnsReportEvenWhenUnhealthy(t *testing.T) {
 
 func TestHealthCheckRejectsSuccessWithoutReport(t *testing.T) {
 	a := newFakeAgent(t)
-	a.body = `{"protocol":1,"success":true}`
+	a.body = `{"protocol":2,"success":true}`
 	c := newClient(t, a)
 	_, err := c.HealthCheck(context.Background(), executor.HealthCheckRequest{
 		Operation: executor.Operation{OperationID: "op_dep_0123456789abcdef01234567_VERIFY_1", DeploymentID: "dep_0123456789abcdef01234567", ServerID: "srv_1"},
@@ -221,7 +249,7 @@ func TestRejectionAndFailureCarryAgentCode(t *testing.T) {
 	a := newFakeAgent(t)
 	c := newClient(t, a)
 
-	a.body = `{"protocol":1,"accepted":false,"reason":"FORBIDDEN"}`
+	a.body = `{"protocol":2,"accepted":false,"reason":"FORBIDDEN"}`
 	err := c.StartRuntime(context.Background(), executor.StartRequest{
 		Operation: executor.Operation{OperationID: "op_d_START_1", DeploymentID: "dep_1", ServerID: "srv_1"}, Container: "c"})
 	var e *Error
@@ -229,7 +257,7 @@ func TestRejectionAndFailureCarryAgentCode(t *testing.T) {
 		t.Fatalf("rejection = %v", err)
 	}
 
-	a.body = `{"protocol":1,"success":false,"errorCode":"RUNTIME_IMAGE_MISSING","message":"no such image"}`
+	a.body = `{"protocol":2,"success":false,"errorCode":"RUNTIME_IMAGE_MISSING","message":"no such image"}`
 	err = c.CreateRuntime(context.Background(), executor.CreateRuntimeRequest{
 		Operation: executor.Operation{OperationID: "op_d_CREATE_RUNTIME_1", DeploymentID: "dep_1", ServerID: "srv_1"},
 		ImageRef:  "axiom-local/x:t", Container: "c", Port: 3000})
@@ -240,7 +268,7 @@ func TestRejectionAndFailureCarryAgentCode(t *testing.T) {
 
 func TestAcknowledgementWithoutResultIsNotAnError(t *testing.T) {
 	a := newFakeAgent(t)
-	a.body = `{"protocol":1,"accepted":true}`
+	a.body = `{"protocol":2,"accepted":true}`
 	c := newClient(t, a)
 	if err := c.StartRuntime(context.Background(), executor.StartRequest{
 		Operation: executor.Operation{OperationID: "op_d_START_1", DeploymentID: "dep_1", ServerID: "srv_1"}, Container: "c"}); err != nil {
@@ -253,12 +281,12 @@ func TestResponseValidationFailsClosed(t *testing.T) {
 		name, body string
 		want       string
 	}{
-		{"foreign deployment", `{"protocol":1,"success":true,"deploymentId":"dep_other"}`, CodeMalformed},
-		{"foreign operation", `{"protocol":1,"success":true,"operationId":"op_other"}`, CodeMalformed},
+		{"foreign deployment", `{"protocol":2,"success":true,"deploymentId":"dep_other"}`, CodeMalformed},
+		{"foreign operation", `{"protocol":2,"success":true,"operationId":"op_other"}`, CodeMalformed},
 		{"other protocol", `{"protocol":99,"success":true}`, CodeMalformed},
-		{"neither ack nor result", `{"protocol":1,"operationId":"x"}`, CodeMalformed},
+		{"neither ack nor result", `{"protocol":2,"operationId":"x"}`, CodeMalformed},
 		{"not json", `not json`, CodeMalformed},
-		{"oversized", `{"protocol":1,"success":true,"message":"` + strings.Repeat("x", MaxResponseBytes) + `"}`, CodeTooLarge},
+		{"oversized", `{"protocol":2,"success":true,"message":"` + strings.Repeat("x", MaxResponseBytes) + `"}`, CodeTooLarge},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -426,4 +454,55 @@ func TestInvalidRequestsNeverReachTheAgent(t *testing.T) {
 
 func TestSatisfiesRuntimeAgentInterface(t *testing.T) {
 	var _ executor.RuntimeAgent = (*Client)(nil)
+}
+
+// TestOperationCarriesTheApplicationScope proves the Engine resolves the
+// application from the deployment and puts it on the wire, distinctly from the
+// deployment (#145).
+func TestOperationCarriesTheApplicationScope(t *testing.T) {
+	a := newFakeAgent(t)
+	c := newClient(t, a)
+	c.Applications = fakeApplications{rec: deployment.Record{
+		ID: "dep_0123456789abcdef01234567", ApplicationID: "app_ffffffffffffffffffffffff",
+	}}
+	if err := c.StartRuntime(context.Background(), executor.StartRequest{
+		Operation: op(), Container: "axiom-acme-web-0123",
+	}); err != nil {
+		t.Fatalf("StartRuntime: %v", err)
+	}
+	ops, _ := a.received()
+	if len(ops) != 1 {
+		t.Fatalf("agent received %d operations, want 1", len(ops))
+	}
+	if got := ops[0]["applicationId"]; got != "app_ffffffffffffffffffffffff" {
+		t.Fatalf("applicationId = %v, want the deployment's application", got)
+	}
+	if got := ops[0]["deploymentId"]; got != "dep_0123456789abcdef01234567" {
+		t.Fatalf("deploymentId = %v", got)
+	}
+}
+
+// TestMissingApplicationRefusesTheOperation is the Engine-side fail-closed
+// half of #145: without an application the operation is never put on the wire.
+func TestMissingApplicationRefusesTheOperation(t *testing.T) {
+	cases := map[string]*Client{}
+	for name, apps := range map[string]Applications{
+		"no lookup":          nil,
+		"unknown deployment": fakeApplications{err: deployment.ErrNotFound},
+		"no application":     fakeApplications{rec: deployment.Record{ID: "dep_0123456789abcdef01234567"}},
+	} {
+		a := newFakeAgent(t)
+		c := newClient(t, a)
+		c.Applications = apps
+		cases[name] = c
+	}
+	for name, c := range cases {
+		err := c.CreateRuntime(context.Background(), executor.CreateRuntimeRequest{
+			Operation: op(), ImageRef: "axiom-local/acme-web:e8e8e8e-1a2b3c4d", Container: "axiom-acme-web-0123", Port: 3000,
+		})
+		var e *Error
+		if !errors.As(err, &e) || e.Code != CodeNoApplication {
+			t.Fatalf("%s: err = %v, want %s", name, err, CodeNoApplication)
+		}
+	}
 }

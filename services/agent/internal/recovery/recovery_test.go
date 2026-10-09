@@ -20,8 +20,9 @@ const (
 
 func managedLabels(dep string) map[string]string {
 	return map[string]string{
-		ownership.LabelManaged:    ownership.ManagedTrue,
-		ownership.LabelDeployment: dep,
+		ownership.LabelManaged:     ownership.ManagedTrue,
+		ownership.LabelDeployment:  dep,
+		ownership.LabelApplication: "app_" + strings.Repeat("a", 24),
 	}
 }
 

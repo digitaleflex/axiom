@@ -269,7 +269,7 @@ func TestAgentHeartbeatInvalidPayloads(t *testing.T) {
 
 	// Unsupported protocol version.
 	body = heartbeatBody(agentID, "srv_pending", "READY")
-	body["protocol"] = 2
+	body["protocol"] = agentauth.ProtocolVersion + 1
 	r = h.heartbeat(agentID, credential, "nonce-hb-s5", body)
 	expect(t, r, 400, CodeInvalidRequest)
 

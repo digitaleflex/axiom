@@ -53,6 +53,8 @@ var (
 	ErrNotManaged = ownership.ErrNotManaged
 	// ErrInvalidDeployment means the deployment id is not dep_<24 hex>.
 	ErrInvalidDeployment = errors.New("traefik: invalid deployment id")
+	// ErrInvalidApplication means the application id is not app_<24 hex> (#145).
+	ErrInvalidApplication = errors.New("traefik: invalid application id")
 	// ErrInvalidPort means the container port is outside 1-65535.
 	ErrInvalidPort = errors.New("traefik: invalid port")
 	// ErrNoDynamicDir means the adapter has no dynamic configuration directory
@@ -68,7 +70,10 @@ const (
 	certResolver = "le"
 )
 
-var deploymentRe = regexp.MustCompile(`^dep_[0-9a-f]{24}$`)
+var (
+	deploymentRe  = regexp.MustCompile(`^dep_[0-9a-f]{24}$`)
+	applicationRe = regexp.MustCompile(`^app_[0-9a-f]{24}$`)
+)
 
 // ValidDomain reports whether domain is a bare lowercase DNS hostname: one or
 // more labels of [a-z0-9] with internal hyphens, separated by dots, no scheme,
@@ -116,12 +121,16 @@ func validLabel(label string) bool {
 // Request is one NETWORK configuration: expose Container:Port at Domain, with
 // TLS when requested.
 type Request struct {
-	Container    string
-	Domain       string
-	Port         int
-	TLS          bool
-	DeploymentID string
-	ServerID     string
+	Container string
+	Domain    string
+	Port      int
+	TLS       bool
+	// ApplicationID and DeploymentID are distinct operation-scope identities
+	// (#145); both are required for the ownership assertion and neither is
+	// derived from the other.
+	ApplicationID string
+	DeploymentID  string
+	ServerID      string
 	// Labels are the target container's ownership labels, used to enforce
 	// ownership.AssertContainer. The dispatcher obtains them from
 	// runtime/docker.Adapter.Inspect. When Verify is wired, Labels may be nil.
@@ -131,17 +140,18 @@ type Request struct {
 // ContainerVerifier enforces the ownership boundary for the target container.
 // The dispatcher wires an implementation backed by runtime/docker (Inspect →
 // ownership.AssertContainer); tests inject a fake. It must return an error
-// matching ownership.ErrNotManaged for a foreign container.
+// matching ownership.ErrNotManaged or ownership.ErrWrongApplication for a
+// container outside the operation's scope.
 type ContainerVerifier interface {
-	VerifyContainer(ctx context.Context, container, deploymentID string) error
+	VerifyContainer(ctx context.Context, container, applicationID, deploymentID string) error
 }
 
 // ContainerVerifierFunc adapts a function to ContainerVerifier.
-type ContainerVerifierFunc func(ctx context.Context, container, deploymentID string) error
+type ContainerVerifierFunc func(ctx context.Context, container, applicationID, deploymentID string) error
 
 // VerifyContainer implements ContainerVerifier.
-func (f ContainerVerifierFunc) VerifyContainer(ctx context.Context, container, deploymentID string) error {
-	return f(ctx, container, deploymentID)
+func (f ContainerVerifierFunc) VerifyContainer(ctx context.Context, container, applicationID, deploymentID string) error {
+	return f(ctx, container, applicationID, deploymentID)
 }
 
 // Adapter writes per-deployment Traefik file-provider configuration.
@@ -162,6 +172,9 @@ type Adapter struct {
 // writes axiom-<deploymentID>.yml. Re-configuring the same deployment is
 // idempotent (the file is rewritten with identical content).
 func (a *Adapter) Configure(ctx context.Context, req Request) error {
+	if !applicationRe.MatchString(req.ApplicationID) {
+		return fmt.Errorf("%w: %q", ErrInvalidApplication, req.ApplicationID)
+	}
 	if !deploymentRe.MatchString(req.DeploymentID) {
 		return fmt.Errorf("%w: %q", ErrInvalidDeployment, req.DeploymentID)
 	}
@@ -247,14 +260,17 @@ func (a *Adapter) Reconcile(active []string) ([]string, error) {
 
 // verifyContainer applies the ownership boundary: name rules first, then the
 // injected verifier, or ownership.AssertContainer with the supplied labels.
+// Both the application and the deployment label must match the operation scope
+// (#145): a container of another application is never routed to.
 func (a *Adapter) verifyContainer(ctx context.Context, req Request) error {
 	if !ownership.ValidateName(req.Container) {
 		return fmt.Errorf("%w: %q", ownership.ErrInvalidName, req.Container)
 	}
+	scope := ownership.Scope{ApplicationID: req.ApplicationID, DeploymentID: req.DeploymentID}
 	if a.Verify != nil {
-		return a.Verify.VerifyContainer(ctx, req.Container, req.DeploymentID)
+		return a.Verify.VerifyContainer(ctx, req.Container, scope.ApplicationID, scope.DeploymentID)
 	}
-	return ownership.AssertContainer(req.Container, req.Labels, req.DeploymentID)
+	return ownership.AssertContainer(req.Container, req.Labels, scope)
 }
 
 func (a *Adapter) render(req Request) ([]byte, error) {

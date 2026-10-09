@@ -163,12 +163,13 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	// the composition root; the Docker adapter enforces the same boundary
 	// internally.
 	app.Traefik.Verify = traefik.ContainerVerifierFunc(
-		func(ctx context.Context, container, deploymentID string) error {
+		func(ctx context.Context, container, applicationID, deploymentID string) error {
 			info, err := app.Docker.Inspect(ctx, container)
 			if err != nil {
 				return err
 			}
-			return ownership.AssertContainer(container, info.Labels, deploymentID)
+			return ownership.AssertContainer(container, info.Labels,
+				ownership.Scope{ApplicationID: applicationID, DeploymentID: deploymentID})
 		})
 	app.Checker = health.NewChecker()
 

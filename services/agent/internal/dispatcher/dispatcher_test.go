@@ -97,11 +97,12 @@ func newOperation(opID, opType string, payload protocol.Payload) protocol.Operat
 			MessageID: "msg_0123456789abcdef0123456789abcdef",
 			SentAt:    time.Now().UTC(),
 		},
-		OperationID:  opID,
-		Type:         opType,
-		DeploymentID: "dep_0123456789abcdef01234567",
-		ServerID:     testIdentity.ServerID,
-		Payload:      payload,
+		OperationID:   opID,
+		Type:          opType,
+		DeploymentID:  "dep_0123456789abcdef01234567",
+		ApplicationID: "app_0123456789abcdef01234567",
+		ServerID:      testIdentity.ServerID,
+		Payload:       payload,
 	}
 }
 
@@ -562,5 +563,65 @@ func TestTimeoutsFor(t *testing.T) {
 	verify := newOperation("op_x", protocol.OpVerifyHealth, protocol.Payload{TimeoutSeconds: 42})
 	if got := tm.For(verify); got != 42*time.Second {
 		t.Fatalf("Verify = %v, want 42s from payload", got)
+	}
+}
+
+// TestDispatchRefusesOperationWithoutApplicationScope is the #145 boundary:
+// an operation that does not name its application is refused with the stable
+// INCOMPLETE_SCOPE code and never reaches an adapter.
+func TestDispatchRefusesOperationWithoutApplicationScope(t *testing.T) {
+	for _, applicationID := range []string{"", "app_short", "dep_0123456789abcdef01234567"} {
+		adapter := &fakeAdapter{}
+		d := newDispatcher(adapter)
+		op := newOperation("op_dep_0123456789abcdef01234567_CREATE_RUNTIME_1",
+			protocol.OpCreateRuntime, protocol.Payload{ImageRef: "sha256:" + strings.Repeat("c", 64), Container: "axiom-app-1", Port: 3000})
+		op.ApplicationID = applicationID
+
+		ack, result := d.Dispatch(context.Background(), op, testIdentity)
+		if ack.Accepted {
+			t.Fatalf("applicationId %q: operation must be refused", applicationID)
+		}
+		if ack.Reason != CodeIncompleteScope || result.ErrorCode != CodeIncompleteScope {
+			t.Fatalf("applicationId %q: codes = %q/%q, want %q", applicationID, ack.Reason, result.ErrorCode, CodeIncompleteScope)
+		}
+		if len(adapter.calls) != 0 {
+			t.Fatalf("applicationId %q: adapter was called %v, want no call", applicationID, adapter.calls)
+		}
+	}
+}
+
+// scopedFake records the scope Dispatch binds it to, proving the application
+// travels from the operation to the adapter distinctly from the deployment.
+type scopedFake struct {
+	fakeAdapter
+	applicationID string
+	deploymentID  string
+	serverID      string
+}
+
+func (s *scopedFake) WithScope(applicationID, deploymentID, serverID string) Adapter {
+	s.applicationID, s.deploymentID, s.serverID = applicationID, deploymentID, serverID
+	return s
+}
+
+// TestDispatchPassesFullScope proves WithScope receives the application, the
+// deployment and the server, and that the application is never derived from
+// the deployment.
+func TestDispatchPassesFullScope(t *testing.T) {
+	scoped := &scopedFake{}
+	d := NewDispatcher([]Adapter{scoped}, slog.Default(),
+		WithClock(func() time.Time { return time.Now().UTC() }))
+	op := newOperation("op_dep_0123456789abcdef01234567_CREATE_RUNTIME_1",
+		protocol.OpCreateRuntime, protocol.Payload{ImageRef: "sha256:" + strings.Repeat("c", 64), Container: "axiom-app-1", Port: 3000})
+	op.ApplicationID = "app_ffffffffffffffffffffffff"
+
+	if _, result := d.Dispatch(context.Background(), op, testIdentity); !result.Success {
+		t.Fatalf("result = %+v, want success", result)
+	}
+	if scoped.applicationID != op.ApplicationID {
+		t.Fatalf("applicationID = %q, want %q", scoped.applicationID, op.ApplicationID)
+	}
+	if scoped.deploymentID != op.DeploymentID || scoped.serverID != op.ServerID {
+		t.Fatalf("scope = (%q, %q), want (%q, %q)", scoped.deploymentID, scoped.serverID, op.DeploymentID, op.ServerID)
 	}
 }

@@ -13,23 +13,33 @@ import (
 
 const testDep = "dep_0123456789abcdef01234567"
 const testDep2 = "dep_89abcdef0123456789abcdef"
+const testApp = "app_0123456789abcdef01234567"
+const testApp2 = "app_89abcdef0123456789abcdef"
 
 func managedLabels(dep string) map[string]string {
+	return managedLabelsFor(dep, testApp)
+}
+
+// managedLabelsFor builds the label set of a container owned by an explicit
+// application (#145): the two identities are stamped independently.
+func managedLabelsFor(dep, app string) map[string]string {
 	return map[string]string{
-		ownership.LabelManaged:    ownership.ManagedTrue,
-		ownership.LabelDeployment: dep,
+		ownership.LabelManaged:     ownership.ManagedTrue,
+		ownership.LabelDeployment:  dep,
+		ownership.LabelApplication: app,
 	}
 }
 
 func validRequest() Request {
 	return Request{
-		Container:    "axiom-app-1",
-		Domain:       "app.example.com",
-		Port:         3000,
-		TLS:          true,
-		DeploymentID: testDep,
-		ServerID:     "srv_test",
-		Labels:       managedLabels(testDep),
+		Container:     "axiom-app-1",
+		Domain:        "app.example.com",
+		Port:          3000,
+		TLS:           true,
+		ApplicationID: testApp,
+		DeploymentID:  testDep,
+		ServerID:      "srv_test",
+		Labels:        managedLabels(testDep),
 	}
 }
 
@@ -199,13 +209,52 @@ func TestConfigureUnmanagedContainerRefused(t *testing.T) {
 	}
 }
 
+// TestConfigureRefusesForeignApplication proves the application boundary
+// (#145): a container of another application is refused even when the
+// deployment label matches, and no configuration is written for it.
+func TestConfigureRefusesForeignApplication(t *testing.T) {
+	dir := t.TempDir()
+	a := &Adapter{DynamicDir: dir}
+	req := validRequest()
+	req.Labels = managedLabelsFor(testDep, testApp2)
+	err := a.Configure(context.Background(), req)
+	if !errors.Is(err, ownership.ErrWrongApplication) {
+		t.Fatalf("err = %v, want ErrWrongApplication", err)
+	}
+	if !errors.Is(err, ownership.ErrForeignResource) {
+		t.Fatalf("err = %v, must match ErrForeignResource", err)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 0 {
+		t.Fatalf("no file may be written for a foreign application: %v", entries)
+	}
+}
+
+// TestConfigureRequiresApplicationScope proves the request scope is mandatory:
+// an operation without an application id never reaches the ownership check.
+func TestConfigureRequiresApplicationScope(t *testing.T) {
+	dir := t.TempDir()
+	a := &Adapter{DynamicDir: dir}
+	for _, app := range []string{"", "not-an-application", testDep} {
+		req := validRequest()
+		req.ApplicationID = app
+		if err := a.Configure(context.Background(), req); !errors.Is(err, ErrInvalidApplication) {
+			t.Fatalf("applicationId %q: err = %v, want ErrInvalidApplication", app, err)
+		}
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 0 {
+		t.Fatalf("an unscoped request must write nothing: %v", entries)
+	}
+}
+
 func TestConfigureUsesInjectedVerifier(t *testing.T) {
 	dir := t.TempDir()
-	var gotContainer, gotDep string
+	var gotContainer, gotApp, gotDep string
 	a := &Adapter{
 		DynamicDir: dir,
-		Verify: ContainerVerifierFunc(func(_ context.Context, container, deploymentID string) error {
-			gotContainer, gotDep = container, deploymentID
+		Verify: ContainerVerifierFunc(func(_ context.Context, container, applicationID, deploymentID string) error {
+			gotContainer, gotApp, gotDep = container, applicationID, deploymentID
 			return nil
 		}),
 	}
@@ -214,8 +263,8 @@ func TestConfigureUsesInjectedVerifier(t *testing.T) {
 	if err := a.Configure(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
-	if gotContainer != "axiom-app-1" || gotDep != testDep {
-		t.Fatalf("verifier got (%q, %q)", gotContainer, gotDep)
+	if gotContainer != "axiom-app-1" || gotApp != testApp || gotDep != testDep {
+		t.Fatalf("verifier got (%q, %q, %q)", gotContainer, gotApp, gotDep)
 	}
 }
 
@@ -245,7 +294,7 @@ func TestReconcileRemovesOnlyStaleAxiomFiles(t *testing.T) {
 	}
 	stale := validRequest()
 	stale.DeploymentID = testDep2
-	stale.Labels = managedLabels(testDep2)
+	stale.Labels = managedLabelsFor(testDep2, testApp)
 	if err := a.Configure(context.Background(), stale); err != nil {
 		t.Fatal(err)
 	}

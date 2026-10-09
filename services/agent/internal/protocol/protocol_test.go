@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -42,7 +43,8 @@ func TestEnvelopeValidation(t *testing.T) {
 func TestOperationValidation(t *testing.T) {
 	agent := AgentIdentity{AgentID: "agent_" + strings.Repeat("a", 24), ServerID: "srv_1"}
 	op := Operation{Envelope: envelope(), OperationID: "op_dep_" + strings.Repeat("b", 24) + "_CREATE_RUNTIME_1",
-		Type: OpCreateRuntime, DeploymentID: "dep_" + strings.Repeat("b", 24), ServerID: "srv_1",
+		Type: OpCreateRuntime, DeploymentID: "dep_" + strings.Repeat("b", 24),
+		ApplicationID: "app_" + strings.Repeat("b", 24), ServerID: "srv_1",
 		Payload: Payload{ImageRef: "sha256:" + strings.Repeat("c", 64), Container: "axiom-app-1", Port: 3000}}
 	if err := op.Validate(now(), agent); err != nil {
 		t.Fatalf("valid operation: %v", err)
@@ -70,6 +72,42 @@ func TestOperationValidation(t *testing.T) {
 	}
 }
 
+// TestOperationRequiresApplicationScope is the #145 contract: applicationId is
+// mandatory and is never inferred from deploymentId. An operation that omits
+// it is refused with ErrIncompleteScope, whatever the envelope version.
+func TestOperationRequiresApplicationScope(t *testing.T) {
+	agent := AgentIdentity{AgentID: "agent_" + strings.Repeat("a", 24), ServerID: "srv_1"}
+	base := func() Operation {
+		return Operation{Envelope: envelope(), OperationID: "op_dep_" + strings.Repeat("b", 24) + "_CREATE_RUNTIME_1",
+			Type: OpCreateRuntime, DeploymentID: "dep_" + strings.Repeat("b", 24),
+			ApplicationID: "app_" + strings.Repeat("b", 24), ServerID: "srv_1",
+			Payload: Payload{ImageRef: "sha256:" + strings.Repeat("c", 64), Container: "axiom-app-1", Port: 3000}}
+	}
+	for _, applicationID := range []string{"", "app_1", "not-an-app", "dep_" + strings.Repeat("b", 24)} {
+		op := base()
+		op.ApplicationID = applicationID
+		err := op.Validate(now(), agent)
+		if !errors.Is(err, ErrIncompleteScope) {
+			t.Fatalf("applicationId %q: err = %v, want ErrIncompleteScope", applicationID, err)
+		}
+		if errors.Is(err, ErrFormat) {
+			t.Fatalf("applicationId %q: refusal must be a scope refusal, not a format error", applicationID)
+		}
+	}
+	// #145: an operation on the current version that omits applicationId is
+	// still refused. The scope requirement is enforced by the check, never by
+	// a version gate.
+	if op := base(); op.Protocol != 2 {
+		t.Fatalf("envelope version = %d, want 2", op.Protocol)
+	}
+	scoped := base()
+	scoped.Protocol = Version
+	scoped.ApplicationID = ""
+	if err := scoped.Validate(now(), agent); !errors.Is(err, ErrIncompleteScope) {
+		t.Fatalf("current-version operation without applicationId: err = %v, want ErrIncompleteScope", err)
+	}
+}
+
 func TestPayloadPerType(t *testing.T) {
 	cases := []struct {
 		typ     string
@@ -91,11 +129,18 @@ func TestPayloadPerType(t *testing.T) {
 }
 
 func TestVersionCompatibility(t *testing.T) {
-	if !Compatible(1, 1) || !Compatible(1, 3) {
+	if !Compatible(1, 1) || !Compatible(1, 3) || !Compatible(MinVersion, Version) {
 		t.Fatal("overlapping ranges must be compatible")
 	}
-	if Compatible(2, 3) {
+	if Compatible(Version+1, Version+3) {
 		t.Fatal("disjoint future range must be incompatible")
+	}
+	// #145: the application scope is required from the V2 envelope upwards —
+	// the scope check enforces it at every accepted version (see
+	// TestOperationRequiresApplicationScope), never the envelope version.
+	// MinVersion = 1 keeps every existing V1 peer compatible.
+	if Version != 2 || MinVersion != 1 {
+		t.Fatalf("Version/MinVersion = %d/%d, want 2/1", Version, MinVersion)
 	}
 }
 
@@ -119,7 +164,7 @@ func TestAllMessagesRoundTrip(t *testing.T) {
 		RegistrationRequest{Envelope: envelope(), AgentVersion: "0.1.0", Capabilities: []string{"docker"}},
 		RegistrationResponse{Envelope: envelope(), AgentIdentity: agent, Negotiated: 1, HeartbeatIntervalSeconds: 30},
 		Heartbeat{Envelope: envelope(), AgentIdentity: agent, Status: "READY", CPUCount: 4},
-		Operation{Envelope: envelope(), OperationID: "op_x", Type: OpStartRuntime, DeploymentID: "dep_x", ServerID: "srv_1", Payload: Payload{Container: "c"}},
+		Operation{Envelope: envelope(), OperationID: "op_x", Type: OpStartRuntime, DeploymentID: "dep_x", ApplicationID: "app_x", ServerID: "srv_1", Payload: Payload{Container: "c"}},
 		Acknowledgement{Envelope: envelope(), OperationID: "op_x", DeploymentID: "dep_x", Accepted: true},
 		Result{Envelope: envelope(), OperationID: "op_x", DeploymentID: "dep_x", Success: true, Health: &HealthReport{StatusCode: 200, LatencyMs: 84, Attempt: 1}},
 		Error{Envelope: envelope(), Code: CodeInvalidMessage, Retryable: false},
@@ -133,7 +178,7 @@ func TestAllMessagesRoundTrip(t *testing.T) {
 		if err := json.Unmarshal(raw, &back); err != nil {
 			t.Fatal(err)
 		}
-		if back["protocol"] != float64(1) {
+		if back["protocol"] != float64(Version) {
 			t.Fatalf("protocol version lost: %v", back)
 		}
 	}

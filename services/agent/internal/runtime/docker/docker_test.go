@@ -66,12 +66,24 @@ func containsArgv(t *testing.T, call []string, want ...string) {
 	}
 }
 
-const testDep = "dep_0123456789abcdef01234567"
+const (
+	testDep = "dep_0123456789abcdef01234567"
+	testApp = "app_0123456789abcdef01234567"
+	// testOtherApp is a second application on the same server: a container of
+	// that application must never be touched by a testApp/testDep operation.
+	testOtherApp = "app_fedcba9876543210fedcba98"
+)
 
 // inspectJSON builds a docker inspect array document. portsJSON is the raw
 // NetworkSettings.Ports object (or "" for none).
 func inspectJSON(name, image string, managed, running bool, portsJSON string) string {
-	labels := `"axiom.deployment": "` + testDep + `"`
+	return inspectJSONForApp(name, image, managed, running, portsJSON, testApp)
+}
+
+// inspectJSONForApp is inspectJSON with an explicit application label, so a
+// test can build a container owned by another application (#145).
+func inspectJSONForApp(name, image string, managed, running bool, portsJSON, applicationID string) string {
+	labels := `"axiom.deployment": "` + testDep + `", "axiom.application": "` + applicationID + `"`
 	if managed {
 		labels = `"axiom.managed": "true", ` + labels
 	}
@@ -129,13 +141,13 @@ func TestCreateHappyPath(t *testing.T) {
 	fullLabels := inspectJSON("axiom-test", "busybox:latest", true, false,
 		`{"8080/tcp":[{"HostIp":"127.0.0.1","HostPort":"32768"}]}`)
 	fullLabels = strings.Replace(fullLabels,
-		`"axiom.managed": "true", "axiom.deployment": "`+testDep+`"`,
-		`"axiom.managed": "true", "axiom.deployment": "`+testDep+`", "axiom.application": "demo-app", "axiom.server": "srv_test", "axiom.created": "2026-10-10T10:00:00Z", "axiom.app": "demo"`, 1)
+		`"axiom.managed": "true", "axiom.deployment": "`+testDep+`", "axiom.application": "`+testApp+`"`,
+		`"axiom.managed": "true", "axiom.deployment": "`+testDep+`", "axiom.application": "`+testApp+`", "axiom.server": "srv_test", "axiom.created": "2026-10-10T10:00:00Z", "axiom.app": "demo"`, 1)
 	stub := createFlowStub(fullLabels)
 	a := &Adapter{Runner: stub}
 	info, err := a.Create(context.Background(), CreateSpec{
 		DeploymentID:  testDep,
-		ApplicationID: "demo-app",
+		ApplicationID: testApp,
 		ServerID:      "srv_test",
 		Container:     "axiom-test",
 		ImageRef:      "busybox:latest",
@@ -157,7 +169,7 @@ func TestCreateHappyPath(t *testing.T) {
 		t.Fatalf("ports = %+v", info.Ports)
 	}
 	if !ownership.IsManaged(info.Labels) || info.Labels[ownership.LabelDeployment] != testDep ||
-		info.Labels[ownership.LabelApplication] != "demo-app" || info.Labels[ownership.LabelServer] != "srv_test" ||
+		info.Labels[ownership.LabelApplication] != testApp || info.Labels[ownership.LabelServer] != "srv_test" ||
 		info.Labels[ownership.LabelCreated] == "" || info.Labels["axiom.app"] != "demo" {
 		t.Fatalf("labels = %v", info.Labels)
 	}
@@ -173,7 +185,7 @@ func TestCreateHappyPath(t *testing.T) {
 	containsSeq(t, c, "-e", "FOO=bar")
 	containsSeq(t, c, "--label", ownership.LabelManaged+"=true")
 	containsSeq(t, c, "--label", ownership.LabelDeployment+"="+testDep)
-	containsSeq(t, c, "--label", ownership.LabelApplication+"=demo-app")
+	containsSeq(t, c, "--label", ownership.LabelApplication+"="+testApp)
 	containsSeq(t, c, "--label", ownership.LabelServer+"=srv_test")
 	containsSeq(t, c, "--label", "axiom.app=demo")
 	containsArgv(t, c, "busybox:latest")
@@ -188,7 +200,7 @@ func TestCreateIdempotent(t *testing.T) {
 			`{"8080/tcp":[{"HostIp":"127.0.0.1","HostPort":"32768"}]}`))
 	}}
 	a := &Adapter{Runner: stub}
-	spec := CreateSpec{DeploymentID: testDep, Container: "axiom-test", ImageRef: "busybox:latest", Port: 8080}
+	spec := CreateSpec{DeploymentID: testDep, ApplicationID: testApp, Container: "axiom-test", ImageRef: "busybox:latest", Port: 8080}
 	info, err := a.Create(context.Background(), spec)
 	if err != nil {
 		t.Fatal(err)
@@ -210,7 +222,7 @@ func TestCreateUnmanagedExistingRefused(t *testing.T) {
 		return okResponse(inspectJSON("axiom-test", "busybox:latest", false, false, "{}"))
 	}}
 	a := &Adapter{Runner: stub}
-	_, err := a.Create(context.Background(), CreateSpec{DeploymentID: testDep, Container: "axiom-test", ImageRef: "busybox:latest", Port: 8080})
+	_, err := a.Create(context.Background(), CreateSpec{DeploymentID: testDep, ApplicationID: testApp, Container: "axiom-test", ImageRef: "busybox:latest", Port: 8080})
 	if !IsNotManaged(err) {
 		t.Fatalf("err = %v, want ErrNotManaged", err)
 	}
@@ -227,7 +239,7 @@ func TestCreateWrongImageRefused(t *testing.T) {
 		return okResponse(inspectJSON("axiom-test", "alpine:latest", true, false, "{}"))
 	}}
 	a := &Adapter{Runner: stub}
-	_, err := a.Create(context.Background(), CreateSpec{DeploymentID: testDep, Container: "axiom-test", ImageRef: "busybox:latest", Port: 8080})
+	_, err := a.Create(context.Background(), CreateSpec{DeploymentID: testDep, ApplicationID: testApp, Container: "axiom-test", ImageRef: "busybox:latest", Port: 8080})
 	var de *Error
 	if !errors.As(err, &de) || de.Code != CodeInvalidInput {
 		t.Fatalf("err = %v, want CodeInvalidInput", err)
@@ -241,11 +253,12 @@ func TestCreateManagedLabelsNotOverridable(t *testing.T) {
 	stub := createFlowStub(inspectJSON("axiom-test", "busybox:latest", true, false, "{}"))
 	a := &Adapter{Runner: stub}
 	_, err := a.Create(context.Background(), CreateSpec{
-		DeploymentID: testDep,
-		Container:    "axiom-test",
-		ImageRef:     "busybox:latest",
-		Port:         8080,
-		Labels:       map[string]string{ownership.LabelManaged: "false", "axiom.app": "demo"},
+		DeploymentID:  testDep,
+		ApplicationID: testApp,
+		Container:     "axiom-test",
+		ImageRef:      "busybox:latest",
+		Port:          8080,
+		Labels:        map[string]string{ownership.LabelManaged: "false", "axiom.app": "demo"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -373,7 +386,7 @@ func TestInvalidNamesRejected(t *testing.T) {
 		if _, err := a.Inspect(ctx, name); err == nil {
 			t.Fatalf("inspect %q: expected error", name)
 		}
-		if _, err := a.Create(ctx, CreateSpec{DeploymentID: testDep, Container: name, ImageRef: "busybox:latest", Port: 80}); err == nil {
+		if _, err := a.Create(ctx, CreateSpec{DeploymentID: testDep, ApplicationID: testApp, Container: name, ImageRef: "busybox:latest", Port: 80}); err == nil {
 			t.Fatalf("create %q: expected error", name)
 		}
 		if err := a.Start(ctx, name); err == nil {
@@ -460,10 +473,11 @@ func TestEnvPassedAsArgvItems(t *testing.T) {
 	stub := createFlowStub(inspectJSON("axiom-test", "busybox:latest", true, false, "{}"))
 	a := &Adapter{Runner: stub}
 	_, err := a.Create(context.Background(), CreateSpec{
-		DeploymentID: testDep,
-		Container:    "axiom-test",
-		ImageRef:     "busybox:latest",
-		Port:         8080,
+		DeploymentID:  testDep,
+		ApplicationID: testApp,
+		Container:     "axiom-test",
+		ImageRef:      "busybox:latest",
+		Port:          8080,
 		Env: map[string]string{
 			"PLAIN":   "value",
 			"SPACED":  "hello world",
@@ -499,7 +513,8 @@ func TestResourceLimitsZeroUnset(t *testing.T) {
 	stub := createFlowStub(inspectJSON("axiom-test", "busybox:latest", true, false, "{}"))
 	a := &Adapter{Runner: stub}
 	_, err := a.Create(context.Background(), CreateSpec{
-		DeploymentID: testDep, Container: "axiom-test",
+		DeploymentID:  testDep,
+		ApplicationID: testApp, Container: "axiom-test",
 		ImageRef: "busybox:latest", Port: 8080,
 	})
 	if err != nil {
@@ -640,7 +655,7 @@ func TestCleanupSkipsUnmanaged(t *testing.T) {
 	a := &Adapter{Runner: stub}
 	// A candidate that fails the scope check is skipped, never force-touched;
 	// the rest of the cleanup proceeds.
-	if err := a.Cleanup(context.Background(), testDep); err != nil {
+	if err := a.Cleanup(context.Background(), testApp, testDep); err != nil {
 		t.Fatalf("err = %v, want nil", err)
 	}
 	rms := stub.callsWith("rm")
@@ -668,7 +683,7 @@ func TestCleanupHappyPath(t *testing.T) {
 		return "", 0, nil
 	}}
 	a := &Adapter{Runner: stub}
-	if err := a.Cleanup(context.Background(), testDep); err != nil {
+	if err := a.Cleanup(context.Background(), testApp, testDep); err != nil {
 		t.Fatal(err)
 	}
 	rms := stub.callsWith("rm")
@@ -681,6 +696,7 @@ func TestCleanupHappyPath(t *testing.T) {
 		t.Fatalf("ps calls = %v", ps)
 	}
 	containsSeq(t, ps[0], "--filter", "label="+ownership.LabelManaged+"="+ownership.ManagedTrue)
+	containsSeq(t, ps[0], "--filter", "label="+ownership.LabelApplication+"="+testApp)
 	containsSeq(t, ps[0], "--filter", "label="+ownership.LabelDeployment+"="+testDep)
 	containsSeq(t, ps[0], "--format", "{{.Names}}")
 }
@@ -691,7 +707,7 @@ func TestCleanupInvalidDeployment(t *testing.T) {
 		return "", 0, nil
 	}}
 	a := &Adapter{Runner: stub}
-	if err := a.Cleanup(context.Background(), "not-a-deployment"); err == nil {
+	if err := a.Cleanup(context.Background(), testApp, "not-a-deployment"); err == nil {
 		t.Fatal("expected error for invalid deploymentId")
 	}
 }

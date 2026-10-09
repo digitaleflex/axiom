@@ -38,6 +38,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/executor"
 	"github.com/digitaleflex/axiom/services/engine/internal/health"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
@@ -57,6 +58,10 @@ const (
 	CodeTooLarge     = "AGENT_RESPONSE_TOO_LARGE"
 	CodeInsecure     = "AGENT_INSECURE_ENDPOINT"
 	CodeInternal     = "AGENT_INTERNAL"
+	// CodeNoApplication reports that the application a deployment rolls out
+	// could not be resolved (#145). The operation is never put on the wire
+	// without it: the agent requires applicationId on every operation.
+	CodeNoApplication = "AGENT_NO_APPLICATION"
 )
 
 // Bounds. Every one of them fails closed.
@@ -73,7 +78,12 @@ const (
 
 // ProtocolVersion mirrors protocol.Version (services/agent/internal/protocol).
 // The two modules cannot share the constant, exactly as agentauth does.
-const ProtocolVersion = 1
+//
+// Operation.ApplicationID is mandatory (#145): the application scope is
+// required from the V2 envelope onwards, and an operation that does not name
+// the application it deploys is refused by the agent with INCOMPLETE_SCOPE.
+// MinVersion stays at 1, so no existing V1 peer is broken by the bump.
+const ProtocolVersion = 2
 
 // DefaultOperationPath is where an operation is posted.
 //
@@ -115,16 +125,28 @@ func (e *Error) Unwrap() error { return e.Cause }
 
 // Sentinels callers may test for.
 var (
-	ErrNoCredential = errors.New("agentclient: no credential available for the agent")
-	ErrNotFound     = errors.New("agentclient: server not found")
-	ErrTimeout      = errors.New("agentclient: operation timed out")
-	ErrUnreachable  = errors.New("agentclient: agent endpoint unreachable")
+	ErrNoCredential  = errors.New("agentclient: no credential available for the agent")
+	ErrNotFound      = errors.New("agentclient: server not found")
+	ErrTimeout       = errors.New("agentclient: operation timed out")
+	ErrUnreachable   = errors.New("agentclient: agent endpoint unreachable")
+	ErrNoApplication = errors.New("agentclient: no application for this deployment")
 )
 
 // Servers resolves the target server record. It is satisfied by
 // *server.Service and by test fakes.
 type Servers interface {
 	Get(ctx context.Context, id string) (server.Record, error)
+}
+
+// Applications resolves the application a deployment rolls out (#145). It is
+// satisfied by a deployment lookup and by test fakes.
+//
+// The application ID is NOT carried by executor.Operation, so the client
+// resolves it from the deployment itself. There is no fallback: an operation
+// whose application cannot be resolved is refused with CodeNoApplication
+// rather than sent without the scope the agent now requires.
+type Applications interface {
+	Get(ctx context.Context, id string) (deployment.Record, error)
 }
 
 // Credential is the Engine's outbound credential for one server's agent.
@@ -150,6 +172,10 @@ type EndpointFunc func(ctx context.Context, serverID, address string) (string, e
 type Client struct {
 	Servers     Servers
 	Credentials CredentialProvider
+	// Applications resolves the application each deployment belongs to (#145).
+	// Required: without it every operation is refused with
+	// AGENT_NO_APPLICATION.
+	Applications Applications
 	// Endpoint resolves the agent base URL. Defaults to https://<address>.
 	Endpoint EndpointFunc
 	HTTP     *http.Client
@@ -237,13 +263,16 @@ type payload struct {
 // because Go's JSON encoder cannot inline an embedded struct declared in
 // another package with an explicit tag; the wire shape is identical.
 type operation struct {
-	Protocol      int     `json:"protocol"`
-	MessageID     string  `json:"messageId"`
-	SentAt        string  `json:"sentAt"`
-	CorrelationID string  `json:"correlationId,omitempty"`
-	OperationID   string  `json:"operationId"`
-	Type          string  `json:"type"`
-	DeploymentID  string  `json:"deploymentId"`
+	Protocol      int    `json:"protocol"`
+	MessageID     string `json:"messageId"`
+	SentAt        string `json:"sentAt"`
+	CorrelationID string `json:"correlationId,omitempty"`
+	OperationID   string `json:"operationId"`
+	Type          string `json:"type"`
+	DeploymentID  string `json:"deploymentId"`
+	// ApplicationID is required (#145): the agent stamps it on the ownership
+	// labels and refuses any operation that omits it.
+	ApplicationID string  `json:"applicationId"`
 	ServerID      string  `json:"serverId"`
 	Payload       payload `json:"payload"`
 }
@@ -422,6 +451,13 @@ func (c *Client) exchange(ctx context.Context, s spec) (operationResponse, error
 		return operationResponse{}, err
 	}
 
+	// The application scope (#145) is resolved before the message is built: an
+	// operation without it is refused by the agent, so it is never sent.
+	applicationID, err := c.applicationID(ctx, s.op.DeploymentID)
+	if err != nil {
+		return operationResponse{}, err
+	}
+
 	base, err := c.endpoint(ctx, s.op.ServerID, srv.Address)
 	if err != nil {
 		return operationResponse{}, err
@@ -435,6 +471,7 @@ func (c *Client) exchange(ctx context.Context, s spec) (operationResponse, error
 		OperationID:   s.op.OperationID,
 		Type:          s.typ,
 		DeploymentID:  s.op.DeploymentID,
+		ApplicationID: applicationID,
 		ServerID:      s.op.ServerID,
 		Payload:       s.body,
 	}
@@ -504,6 +541,23 @@ func (c *Client) exchange(ctx context.Context, s spec) (operationResponse, error
 	c.log().Info("agent operation completed",
 		"deploymentId", s.op.DeploymentID, "operationId", s.op.OperationID, "operationType", s.typ)
 	return out, nil
+}
+
+// applicationID resolves the application a deployment rolls out. It fails
+// closed: no resolver, an unknown deployment or an empty application ID all
+// refuse the operation instead of sending it without a scope.
+func (c *Client) applicationID(ctx context.Context, deploymentID string) (string, error) {
+	if c.Applications == nil {
+		return "", &Error{Code: CodeNoApplication, Message: "agent client has no application lookup", Cause: ErrNoApplication}
+	}
+	rec, err := c.Applications.Get(ctx, deploymentID)
+	if err != nil {
+		return "", &Error{Code: CodeNoApplication, Message: "resolve the deployment's application", Cause: err}
+	}
+	if rec.ApplicationID == "" {
+		return "", &Error{Code: CodeNoApplication, Message: "deployment " + deploymentID + " names no application", Cause: ErrNoApplication}
+	}
+	return rec.ApplicationID, nil
 }
 
 func (c *Client) credential(ctx context.Context, serverID string) (Credential, error) {

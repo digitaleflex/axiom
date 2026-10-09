@@ -33,7 +33,9 @@ const (
 
 	// ProtocolVersion is the negotiated Agent ↔ Engine protocol version
 	// (services/agent/internal/protocol.Version; the modules cannot share code).
-	ProtocolVersion = 1
+	// V2 requires the application scope on every operation; MinVersion = 1, so
+	// no existing V1 peer is broken.
+	ProtocolVersion = 2
 	// HeartbeatIntervalSeconds advertised to the agent at registration (#78).
 	HeartbeatIntervalSeconds = 30
 )

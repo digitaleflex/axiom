@@ -41,6 +41,11 @@ var (
 	// ErrWrongDeployment means the resource is Axiom-managed but belongs to
 	// a different deployment than the operation's scope.
 	ErrWrongDeployment = fmt.Errorf("%w: resource belongs to a different deployment", ErrForeignResource)
+	// ErrWrongApplication means the resource is Axiom-managed but belongs to
+	// a different application than the operation's scope (#145). Deployment
+	// and application are distinct identities: matching deployment alone is
+	// never sufficient to authorize a mutation.
+	ErrWrongApplication = fmt.Errorf("%w: resource belongs to a different application", ErrForeignResource)
 	// ErrInvalidName means a resource name violates the Axiom naming rules.
 	ErrInvalidName = errors.New("ownership: invalid resource name")
 )
@@ -76,10 +81,14 @@ func NetworkName(serverID string) string {
 }
 
 // IsManaged reports whether labels mark the resource as Axiom-managed:
-// axiom.managed must be exactly "true" AND axiom.deployment must be
-// present. Anything else — including a bare deployment label — is foreign.
+// axiom.managed must be exactly "true" AND both axiom.deployment and
+// axiom.application must be present. Anything else — including a bare
+// deployment label, or a resource stamped before the agent could tell an
+// application from a deployment (#145) — is foreign.
 func IsManaged(labels map[string]string) bool {
-	return labels[LabelManaged] == ManagedTrue && labels[LabelDeployment] != ""
+	return labels[LabelManaged] == ManagedTrue &&
+		labels[LabelDeployment] != "" &&
+		labels[LabelApplication] != ""
 }
 
 // NewLabels returns the canonical label set for a resource created for the
@@ -94,49 +103,65 @@ func NewLabels(deploymentID, applicationID, serverID string) map[string]string {
 	}
 }
 
+// Scope is the resource identity an operation is authorized against (#145).
+// Application and deployment are both mandatory and independent: nothing in
+// this package ever derives one from the other.
+type Scope struct {
+	ApplicationID string
+	DeploymentID  string
+}
+
 // AssertContainer verifies that the container with the given name and
-// labels may be touched within the given deployment scope: the name must
-// satisfy the Axiom naming rules, the container must be Axiom-managed, and
-// its deployment label must match the scope.
-func AssertContainer(name string, labels map[string]string, deploymentID string) error {
+// labels may be touched within the given scope: the name must satisfy the
+// Axiom naming rules, the container must be Axiom-managed, and both its
+// application and its deployment label must match the scope. A container of
+// another application of the same deployment is refused with
+// ErrWrongApplication.
+func AssertContainer(name string, labels map[string]string, scope Scope) error {
 	if !ValidateName(name) {
 		return fmt.Errorf("%w: %q", ErrInvalidName, name)
 	}
-	return assertScope(name, labels, deploymentID)
+	return assertScope(name, labels, scope)
 }
 
 // AssertNetwork verifies that the network with the given name and labels
-// may be touched within the given deployment scope: the name must follow
-// the Axiom network pattern, the network must be Axiom-managed, and its
-// deployment label must match the scope.
-func AssertNetwork(name string, labels map[string]string, deploymentID string) error {
+// may be touched within the given scope: the name must follow the Axiom
+// network pattern, the network must be Axiom-managed, and both its
+// application and its deployment label must match the scope.
+func AssertNetwork(name string, labels map[string]string, scope Scope) error {
 	if !strings.HasPrefix(name, "axiom-") || !strings.HasSuffix(name, "-net") {
 		return fmt.Errorf("%w: %q is not an Axiom network name", ErrInvalidName, name)
 	}
-	return assertScope(name, labels, deploymentID)
+	return assertScope(name, labels, scope)
 }
 
 // assertScope enforces the shared managed-and-in-scope check.
-func assertScope(name string, labels map[string]string, deploymentID string) error {
+func assertScope(name string, labels map[string]string, scope Scope) error {
 	if !IsManaged(labels) {
 		return fmt.Errorf("%w: %q", ErrNotManaged, name)
 	}
-	if labels[LabelDeployment] != deploymentID {
-		return fmt.Errorf("%w: %q (scope %s)", ErrWrongDeployment, name, deploymentID)
+	if labels[LabelApplication] != scope.ApplicationID {
+		return fmt.Errorf("%w: %q (scope application %s)", ErrWrongApplication, name, scope.ApplicationID)
+	}
+	if labels[LabelDeployment] != scope.DeploymentID {
+		return fmt.Errorf("%w: %q (scope deployment %s)", ErrWrongDeployment, name, scope.DeploymentID)
 	}
 	return nil
 }
 
 // CleanupScope bounds what a cleanup pass may remove: only Axiom-managed
-// resources whose deployment label matches the scope.
+// resources whose application and deployment labels match the scope.
 type CleanupScope struct {
-	DeploymentID string
+	ApplicationID string
+	DeploymentID  string
 }
 
 // MayRemove reports whether the named resource with these labels may be
 // removed within the scope.
 func (s CleanupScope) MayRemove(name string, labels map[string]string) bool {
-	return IsManaged(labels) && labels[LabelDeployment] == s.DeploymentID
+	return IsManaged(labels) &&
+		labels[LabelApplication] == s.ApplicationID &&
+		labels[LabelDeployment] == s.DeploymentID
 }
 
 // Resource is a named, labelled resource (container or network) that is a

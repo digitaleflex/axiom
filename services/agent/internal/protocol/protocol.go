@@ -17,8 +17,15 @@ import (
 
 // Versions. The agent and Engine each support a range; they negotiate the
 // highest common version at registration.
+//
+// The application scope is mandatory on the V2 envelope (#145): every
+// operation must name its application, and one that does not is refused by
+// the scope check with CodeIncompleteScope (ErrIncompleteScope) — the refusal
+// is carried by that check at every accepted version, not by a version gate.
+// MinVersion stays at 1, so no existing V1 peer is broken by the bump: the
+// scope check simply also applies to their messages.
 const (
-	Version    = 1
+	Version    = 2
 	MinVersion = 1
 )
 
@@ -56,6 +63,7 @@ const (
 var (
 	idRe          = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 	deploymentRe  = regexp.MustCompile(`^dep_[0-9a-f]{24}$`)
+	applicationRe = regexp.MustCompile(`^app_[0-9a-f]{24}$`)
 	operationIDRe = regexp.MustCompile(`^op_dep_[0-9a-f]{24}_[A-Z_]+_[0-9]+$`)
 	correlationRe = regexp.MustCompile(`^req_[0-9a-f]{16}$`)
 	agentIDRe     = regexp.MustCompile(`^agent_[0-9a-f]{24}$`)
@@ -99,6 +107,11 @@ var (
 	ErrType    = errors.New("protocol: unknown or unsupported operation type")
 	ErrBinding = errors.New("protocol: server identity mismatch")
 	ErrReplay  = errors.New("protocol: replayed message")
+	// ErrIncompleteScope means the operation does not carry the full resource
+	// scope it needs to be executed safely — currently a missing or malformed
+	// ApplicationID (#145). It is deliberately distinct from ErrFormat: it is a
+	// security refusal, not a syntax error, and maps to CodeIncompleteScope.
+	ErrIncompleteScope = errors.New("protocol: incomplete operation scope")
 )
 
 // AgentIdentity binds an agent to its server. The agent ID is issued at
@@ -184,11 +197,18 @@ type Operation struct {
 	// OperationID is the idempotency key: op_<deploymentID>_<STEP>_<attempt>.
 	// Retried attempts reuse attempt numbers deterministically, so redelivery
 	// executes at most once per attempt.
-	OperationID  string  `json:"operationId"`
-	Type         string  `json:"type"`
-	DeploymentID string  `json:"deploymentId"`
-	ServerID     string  `json:"serverId"`
-	Payload      Payload `json:"payload"`
+	OperationID  string `json:"operationId"`
+	Type         string `json:"type"`
+	DeploymentID string `json:"deploymentId"`
+	// ApplicationID is the application the deployment belongs to (#145). It is
+	// REQUIRED and is never inferred: the agent stamps it on the ownership
+	// labels and checks it on every assertion, so an operation that omits it
+	// cannot be attributed to an application and is refused with
+	// CodeIncompleteScope. ApplicationID and DeploymentID are distinct: a
+	// deployment is one attempt to roll one application out to one server.
+	ApplicationID string  `json:"applicationId"`
+	ServerID      string  `json:"serverId"`
+	Payload       Payload `json:"payload"`
 }
 
 func (o Operation) Validate(now time.Time, agent AgentIdentity) error {
@@ -203,6 +223,12 @@ func (o Operation) Validate(now time.Time, agent AgentIdentity) error {
 	}
 	if !deploymentRe.MatchString(o.DeploymentID) {
 		return fmt.Errorf("%w: deploymentId", ErrFormat)
+	}
+	// Application scope (#145): required, never defaulted. Without it the agent
+	// cannot tell which application a container belongs to, so it refuses
+	// instead of stamping a wrong ownership label.
+	if !applicationRe.MatchString(o.ApplicationID) {
+		return fmt.Errorf("%w: applicationId %q", ErrIncompleteScope, o.ApplicationID)
 	}
 	// Server identity binding: the operation must target this agent's server.
 	if o.ServerID != agent.ServerID {
@@ -330,6 +356,11 @@ const (
 	CodeReplayed         = "REPLAYED"
 	CodeVersionMismatch  = "VERSION_MISMATCH"
 	CodeInternal         = "INTERNAL"
+	// CodeIncompleteScope is reported when an operation omits the resource
+	// scope required to execute it safely (#145). Stable: API clients branch on
+	// it to tell "the Engine sent an incomplete operation" from "the agent
+	// could not run it".
+	CodeIncompleteScope = "INCOMPLETE_SCOPE"
 )
 
 // Dedupe tracks recent message/operation IDs to reject replays within the

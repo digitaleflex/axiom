@@ -40,7 +40,7 @@ import (
 const (
 	testDeployment = "dep_0123456789abcdef01234567"
 	testServer     = "srv_test"
-	testApp        = "app"
+	testApp        = "app_0123456789abcdef01234567"
 	testContainer  = "axiom-app-1"
 	testAgentID    = "agent_0123456789abcdef01234567"
 
@@ -304,12 +304,13 @@ func (b *bridge) CreateRuntime(ctx context.Context, p dispatcher.CreateParams) e
 
 func (b *bridge) ConfigureNetwork(ctx context.Context, p dispatcher.NetworkParams) error {
 	err := b.traefik.Configure(ctx, traefik.Request{
-		Container:    p.Container,
-		Domain:       p.Domain,
-		Port:         p.Port,
-		TLS:          p.TLS,
-		DeploymentID: b.DeploymentID,
-		ServerID:     b.ServerID,
+		Container:     p.Container,
+		Domain:        p.Domain,
+		Port:          p.Port,
+		TLS:           p.TLS,
+		ApplicationID: b.ApplicationID,
+		DeploymentID:  b.DeploymentID,
+		ServerID:      b.ServerID,
 	})
 	return b.mapTraefik(err)
 }
@@ -397,12 +398,13 @@ func newHarness(t *testing.T) *harness {
 		Now:    func() time.Time { return fixedNow },
 	}
 	trf := &traefik.Adapter{DynamicDir: filepath.Join(dir, "dynamic")}
-	trf.Verify = traefik.ContainerVerifierFunc(func(ctx context.Context, container, dep string) error {
+	trf.Verify = traefik.ContainerVerifierFunc(func(ctx context.Context, container, app, dep string) error {
 		info, err := d.Inspect(ctx, container)
 		if err != nil {
 			return err
 		}
-		return ownership.AssertContainer(container, info.Labels, dep)
+		return ownership.AssertContainer(container, info.Labels,
+			ownership.Scope{ApplicationID: app, DeploymentID: dep})
 	})
 	check := &health.Checker{
 		Sleep: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
@@ -435,11 +437,12 @@ func newOperation(opID, opType string, payload protocol.Payload, serverID string
 			MessageID: "msg_op_0001",
 			SentAt:    fixedNow,
 		},
-		OperationID:  opID,
-		Type:         opType,
-		DeploymentID: testDeployment,
-		ServerID:     serverID,
-		Payload:      payload,
+		OperationID:   opID,
+		Type:          opType,
+		DeploymentID:  testDeployment,
+		ApplicationID: testApp,
+		ServerID:      serverID,
+		Payload:       payload,
 	}
 }
 

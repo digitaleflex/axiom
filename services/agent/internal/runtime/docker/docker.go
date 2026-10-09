@@ -151,9 +151,10 @@ func (a *Adapter) withTimeout(ctx context.Context) (context.Context, context.Can
 // naming rules (ownership.ValidateName) — stricter than the protocol's idRe,
 // because every container the adapter creates or touches is Axiom-named.
 var (
-	deploymentRe = regexp.MustCompile(`^dep_[0-9a-f]{24}$`)
-	envKeyRe     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	sha256Re     = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	deploymentRe  = regexp.MustCompile(`^dep_[0-9a-f]{24}$`)
+	applicationRe = regexp.MustCompile(`^app_[0-9a-f]{24}$`)
+	envKeyRe      = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	sha256Re      = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
 
 // validImageRef mirrors protocol.validImageRef: printable ASCII, no leading or
@@ -192,6 +193,10 @@ type ResourceLimits struct {
 
 // CreateSpec describes one container creation (CREATE_RUNTIME).
 type CreateSpec struct {
+	// DeploymentID and ApplicationID are distinct identities (#145) and both
+	// are required: the deployment is one rollout attempt, the application is
+	// what it rolls out. The adapter refuses a spec missing either, because
+	// the ownership labels it would stamp would then be un-attributable.
 	DeploymentID  string
 	ApplicationID string
 	ServerID      string
@@ -222,6 +227,9 @@ func (s CreateSpec) validate() *Error {
 	}
 	if !deploymentRe.MatchString(s.DeploymentID) {
 		return &Error{Code: CodeInvalidInput, Message: "invalid deploymentId"}
+	}
+	if !applicationRe.MatchString(s.ApplicationID) {
+		return &Error{Code: CodeInvalidInput, Message: "invalid applicationId"}
 	}
 	for k, v := range s.Env {
 		if !envKeyRe.MatchString(k) {
@@ -448,12 +456,16 @@ func (a *Adapter) Tail(ctx context.Context, container string, n int) (string, er
 	return out, nil
 }
 
-// Cleanup removes every managed container in a deployment scope. The listing
-// query filters on both the managed and deployment labels; each candidate is
-// re-verified through inspect and ownership.CleanupScope.MayRemove before
-// removal (defense in depth — a container that is not removable within the
-// scope is skipped, never force-touched).
-func (a *Adapter) Cleanup(ctx context.Context, deploymentID string) error {
+// Cleanup removes every managed container in an operation scope. The listing
+// query filters on the managed, application and deployment labels; each
+// candidate is re-verified through inspect and
+// ownership.CleanupScope.MayRemove before removal (defense in depth — a
+// container that is not removable within the scope is skipped, never
+// force-touched).
+func (a *Adapter) Cleanup(ctx context.Context, applicationID, deploymentID string) error {
+	if !applicationRe.MatchString(applicationID) {
+		return &Error{Code: CodeInvalidInput, Message: "invalid applicationId"}
+	}
 	if !deploymentRe.MatchString(deploymentID) {
 		return &Error{Code: CodeInvalidInput, Message: "invalid deploymentId"}
 	}
@@ -461,6 +473,7 @@ func (a *Adapter) Cleanup(ctx context.Context, deploymentID string) error {
 	defer cancel()
 	out, exit, err := a.runner().Run(ctx, "ps", "-a",
 		"--filter", "label="+ownership.LabelManaged+"="+ownership.ManagedTrue,
+		"--filter", "label="+ownership.LabelApplication+"="+applicationID,
 		"--filter", "label="+ownership.LabelDeployment+"="+deploymentID,
 		"--format", "{{.Names}}")
 	if ctx.Err() != nil {
@@ -472,7 +485,7 @@ func (a *Adapter) Cleanup(ctx context.Context, deploymentID string) error {
 	if err != nil {
 		return &Error{Code: CodeDockerFailed, Message: "docker ps failed to start", Cause: err, Log: out}
 	}
-	scope := ownership.CleanupScope{DeploymentID: deploymentID}
+	scope := ownership.CleanupScope{ApplicationID: applicationID, DeploymentID: deploymentID}
 	for _, name := range strings.Split(out, "\n") {
 		name = strings.TrimSpace(name)
 		if name == "" {

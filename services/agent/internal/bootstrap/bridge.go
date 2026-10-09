@@ -30,6 +30,13 @@ const (
 	CodeNetworkFailed = "NETWORK_CONFIG_FAILED"
 )
 
+// errUnscopedBridge guards the bridge against executing an operation whose
+// scope was never resolved (#145). The dispatcher refuses such an operation at
+// validation time; this is the defense-in-depth backstop, so a future caller
+// that reaches the bridge unscoped gets a stable code instead of an
+// un-attributable ownership label.
+var errUnscopedBridge = errors.New("bootstrap: operation carries no application scope")
+
 // codedError implements dispatcher.ErrorCoder so an adapter failure surfaces a
 // stable machine code instead of degrading to INTERNAL.
 type codedError struct {
@@ -46,34 +53,46 @@ func (e *codedError) Unwrap() error     { return e.err }
 // harness used to fake, and what closes that gap in the failure matrix.
 //
 // It implements dispatcher.ScopedAdapter: the closed operation payloads carry
-// no deployment or server identity, so the bridge resolves a scoped view from
+// no resource or server identity, so the bridge resolves a scoped view from
 // the operation before executing.
 type runtimeBridge struct {
 	docker  *docker.Adapter
 	traefik *traefik.Adapter
 	health  *health.Checker
 
-	deploymentID string
-	serverID     string
+	applicationID string
+	deploymentID  string
+	serverID      string
 }
 
 var _ dispatcher.ScopedAdapter = (*runtimeBridge)(nil)
 
-// WithScope returns a copy of the bridge bound to one operation's deployment
-// scope. The receiver is never mutated, so concurrent operations never share
-// ownership labels.
-func (b *runtimeBridge) WithScope(deploymentID, serverID string) dispatcher.Adapter {
+// WithScope returns a copy of the bridge bound to one operation's scope. The
+// application and the deployment are distinct identities (#145): the
+// application is carried through verbatim from the protocol operation, never
+// derived from the deployment. The receiver is never mutated, so concurrent
+// operations never share ownership labels.
+func (b *runtimeBridge) WithScope(applicationID, deploymentID, serverID string) dispatcher.Adapter {
 	scoped := *b
+	scoped.applicationID = applicationID
 	scoped.deploymentID = deploymentID
 	scoped.serverID = serverID
 	return &scoped
 }
 
+// scope is the operation scope this bridge executes in.
+func (b *runtimeBridge) scope() ownership.Scope {
+	return ownership.Scope{ApplicationID: b.applicationID, DeploymentID: b.deploymentID}
+}
+
 // CreateRuntime implements dispatcher.Adapter (CREATE_RUNTIME).
 func (b *runtimeBridge) CreateRuntime(ctx context.Context, p dispatcher.CreateParams) error {
+	if b.applicationID == "" {
+		return &codedError{code: dispatcher.CodeIncompleteScope, err: errUnscopedBridge}
+	}
 	_, err := b.docker.Create(ctx, docker.CreateSpec{
 		DeploymentID:  b.deploymentID,
-		ApplicationID: b.deploymentID,
+		ApplicationID: b.applicationID,
 		ServerID:      b.serverID,
 		Container:     p.Container,
 		ImageRef:      p.ImageRef,
@@ -84,13 +103,17 @@ func (b *runtimeBridge) CreateRuntime(ctx context.Context, p dispatcher.CreatePa
 
 // ConfigureNetwork implements dispatcher.Adapter (NETWORK).
 func (b *runtimeBridge) ConfigureNetwork(ctx context.Context, p dispatcher.NetworkParams) error {
+	if b.applicationID == "" {
+		return &codedError{code: dispatcher.CodeIncompleteScope, err: errUnscopedBridge}
+	}
 	err := b.traefik.Configure(ctx, traefik.Request{
-		Container:    p.Container,
-		Domain:       p.Domain,
-		Port:         p.Port,
-		TLS:          p.TLS,
-		DeploymentID: b.deploymentID,
-		ServerID:     b.serverID,
+		Container:     p.Container,
+		Domain:        p.Domain,
+		Port:          p.Port,
+		TLS:           p.TLS,
+		ApplicationID: b.applicationID,
+		DeploymentID:  b.deploymentID,
+		ServerID:      b.serverID,
 	})
 	if err == nil {
 		return nil

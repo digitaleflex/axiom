@@ -91,7 +91,7 @@ func TestAgentRegisterAndStatus(t *testing.T) {
 	expect(t, r, 201, "")
 	agentID, _ := r.body["agentId"].(string)
 	credential, _ := r.body["credential"].(string)
-	if !strings.HasPrefix(agentID, "agent_") || credential == "" || r.body["negotiated"].(float64) != 1 {
+	if !strings.HasPrefix(agentID, "agent_") || credential == "" || r.body["negotiated"].(float64) != float64(agentauth.ProtocolVersion) {
 		t.Fatalf("register = %v", r.body)
 	}
 	if r.body["serverId"] != "srv_pending" || r.body["credentialVersion"].(float64) != 1 {

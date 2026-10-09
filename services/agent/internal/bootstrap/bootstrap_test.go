@@ -415,8 +415,9 @@ type allowInbound struct{}
 func (allowInbound) Authenticate(*http.Request) error { return nil }
 
 const (
-	testOperationID  = "op_dep_0123456789abcdef01234567_CREATE_RUNTIME_1"
-	testDeploymentID = "dep_0123456789abcdef01234567"
+	testOperationID   = "op_dep_0123456789abcdef01234567_CREATE_RUNTIME_1"
+	testDeploymentID  = "dep_0123456789abcdef01234567"
+	testApplicationID = "app_0123456789abcdef01234567"
 )
 
 // validOperation returns a well-formed CREATE_RUNTIME operation bound to
@@ -427,10 +428,11 @@ func validOperation() []byte {
 			Protocol: protocol.Version, MessageID: "msg_op_0001",
 			SentAt: time.Now().UTC(),
 		},
-		OperationID:  testOperationID,
-		Type:         protocol.OpCreateRuntime,
-		DeploymentID: testDeploymentID,
-		ServerID:     "srv_test",
+		OperationID:   testOperationID,
+		Type:          protocol.OpCreateRuntime,
+		DeploymentID:  testDeploymentID,
+		ApplicationID: testApplicationID,
+		ServerID:      "srv_test",
 		Payload: protocol.Payload{
 			ImageRef:  "sha256:" + strings.Repeat("a", 64),
 			Container: "axiom-app-1",

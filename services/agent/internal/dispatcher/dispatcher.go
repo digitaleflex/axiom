@@ -62,6 +62,9 @@ const (
 	CodeVersionMismatch  = protocol.CodeVersionMismatch
 	CodeStaleMessage     = protocol.CodeStaleMessage
 	CodeInternal         = protocol.CodeInternal
+	// CodeIncompleteScope is the stable code for an operation that omits the
+	// resource scope required to execute it (#145: a missing ApplicationID).
+	CodeIncompleteScope = protocol.CodeIncompleteScope
 	// CodeInterrupted reports an aborted execution (context cancellation or
 	// per-operation timeout). The protocol envelope has no INTERRUPTED code;
 	// the dispatcher defines it locally.
@@ -131,12 +134,12 @@ type Adapter interface {
 // dispatcher surfaces that code verbatim in Result.ErrorCode.
 type ErrorCoder interface{ ErrorCode() string }
 
-// ScopedAdapter is an Adapter that needs the operation's deployment scope
-// (deployment and server identity) to act on the runtime — the Docker adapter
-// stamps canonical ownership labels from it, and the Traefik adapter names the
-// per-deployment dynamic file from it. The closed operation payloads carry
-// neither, so Dispatch resolves a per-operation view through this optional
-// interface before executing.
+// ScopedAdapter is an Adapter that needs the operation's resource scope
+// (application, deployment and server identity) to act on the runtime — the
+// Docker adapter stamps canonical ownership labels from it, and the Traefik
+// adapter names the per-deployment dynamic file from it. The closed operation
+// payloads carry none of them, so Dispatch resolves a per-operation view
+// through this optional interface before executing.
 //
 // It is additive: an Adapter that does not implement it is used as-is, exactly
 // as before.
@@ -144,18 +147,19 @@ type ScopedAdapter interface {
 	Adapter
 	// WithScope returns the adapter bound to one operation's scope. The
 	// returned value must be safe for concurrent use and must not mutate the
-	// receiver.
-	WithScope(deploymentID, serverID string) Adapter
+	// receiver. applicationID and deploymentID are distinct identities
+	// (#145); neither is ever derived from the other.
+	WithScope(applicationID, deploymentID, serverID string) Adapter
 }
 
 // scopedAdapter resolves the per-operation adapter when the configured one
-// needs a deployment scope.
+// needs a resource scope.
 func scopedAdapter(a Adapter, op protocol.Operation) Adapter {
 	if a == nil {
 		return nil
 	}
 	if s, ok := a.(ScopedAdapter); ok {
-		return s.WithScope(op.DeploymentID, op.ServerID)
+		return s.WithScope(op.ApplicationID, op.DeploymentID, op.ServerID)
 	}
 	return a
 }
@@ -456,6 +460,8 @@ func codeForErr(err error) string {
 		return CodeReplayed
 	case errors.Is(err, protocol.ErrFormat):
 		return CodeInvalidMessage
+	case errors.Is(err, protocol.ErrIncompleteScope):
+		return CodeIncompleteScope
 	default:
 		return CodeInternal
 	}
