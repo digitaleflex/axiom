@@ -28,9 +28,12 @@ func (r *fakeRepo) Get(_ context.Context, id string) (Record, error) {
 	}
 	return rec, nil
 }
-func (r *fakeRepo) ListFiltered(_ context.Context, status string, _, _ int) ([]Record, int, error) {
+func (r *fakeRepo) ListFiltered(_ context.Context, ownerID, status string, _, _ int) ([]Record, int, error) {
 	var out []Record
 	for _, rec := range r.records {
+		if rec.OwnerID != ownerID {
+			continue
+		}
 		if status == "" || string(rec.Status) == status {
 			out = append(out, rec)
 		}

@@ -136,7 +136,7 @@ func TestWithDatabase(t *testing.T) {
 	for _, q := range []string{
 		`INSERT INTO github_connections (id, user_id) VALUES ('ghc_` + suffix + `', 'usr_local')`,
 		`INSERT INTO repositories (id, connection_id, external_id, full_name, clone_url) VALUES ('repo_` + suffix + `', 'ghc_` + suffix + `', '` + suffix + `', 'acme/web', 'https://github.com/acme/web.git')`,
-		`INSERT INTO servers (id, name, address, status) VALUES ('srv_` + suffix + `', 'srv', '203.0.113.10', 'ready')`,
+		`INSERT INTO servers (id, name, address, status, owner_id) VALUES ('srv_` + suffix + `', 'srv', '203.0.113.10', 'ready', 'usr_local')`,
 	} {
 		if _, err := db.ExecContext(ctx, q); err != nil {
 			t.Fatalf("%s: %v", q, err)

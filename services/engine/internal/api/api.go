@@ -23,7 +23,10 @@ type Servers interface {
 	Get(ctx context.Context, id string) (server.Record, error)
 	Rename(ctx context.Context, id, name string) (server.Record, error)
 	Remove(ctx context.Context, id string) error
-	ListFiltered(ctx context.Context, status string, limit, offset int) ([]server.Record, int, error)
+	// ListFiltered lists the servers owned by ownerID (strict ownership
+	// scope), optionally filtered by status. The API only ever lists the
+	// caller's own servers: cross-owner enumeration is not exposed.
+	ListFiltered(ctx context.Context, ownerID, status string, limit, offset int) ([]server.Record, int, error)
 	// UpdateHealth persists agent heartbeat liveness (#78).
 	UpdateHealth(ctx context.Context, id string, health server.Health) error
 }

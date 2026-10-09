@@ -137,6 +137,12 @@ func (a *API) listServers(w http.ResponseWriter, r *http.Request) error {
 	if a.servers == nil {
 		return errUnavailable
 	}
+	// authz: a caller lists the servers they own (same shape as register).
+	if ok, _ := a.authorize(r, authz.ActionServerRead, authz.Resource{
+		Type: "server", OwnerID: principal(r.Context()).UserID,
+	}); !ok {
+		return newError(http.StatusForbidden, CodeForbidden, "server listing is not allowed", nil)
+	}
 	p, err := parsePage(r)
 	if err != nil {
 		return err
@@ -147,7 +153,8 @@ func (a *API) listServers(w http.ResponseWriter, r *http.Request) error {
 	default:
 		return errInvalid("status must be pending, ready, degraded, offline, revoked or unknown")
 	}
-	items, total, err := a.servers.ListFiltered(r.Context(), status, p.Limit, p.offset())
+	// Owner-scoped listing: only the caller's servers are ever returned.
+	items, total, err := a.servers.ListFiltered(r.Context(), principal(r.Context()).UserID, status, p.Limit, p.offset())
 	if err != nil {
 		return err
 	}
@@ -159,6 +166,10 @@ func (a *API) listServers(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// loadServer returns a server the caller may read. Servers owned by
+// someone else are reported as not found (no existence leak), matching the
+// 404-hiding rule applied to applications and deployments. authz is
+// defense-in-depth beneath that hiding rule.
 func (a *API) loadServer(r *http.Request) (server.Record, error) {
 	if a.servers == nil {
 		return server.Record{}, errUnavailable
@@ -168,7 +179,16 @@ func (a *API) loadServer(r *http.Request) (server.Record, error) {
 	if errors.Is(err, server.ErrNotFound) {
 		return server.Record{}, errNotFound("server", id)
 	}
-	return s, err
+	if err != nil {
+		return server.Record{}, err
+	}
+	// authz: the caller must be allowed to read the server (V0.1: own it).
+	if ok, _ := a.authorize(r, authz.ActionServerRead, authz.Resource{
+		Type: "server", ID: s.ID, OwnerID: s.OwnerID,
+	}); !ok {
+		return server.Record{}, errNotFound("server", id)
+	}
+	return s, nil
 }
 
 func (a *API) getServer(w http.ResponseWriter, r *http.Request) error {

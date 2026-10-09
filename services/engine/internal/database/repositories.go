@@ -120,10 +120,10 @@ func (r ServerRepository) get(ctx context.Context, id string) (server.Record, er
 	var rawCapabilities []byte
 	var lastSeen sql.NullTime
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id, name, address, status, agent_version, capabilities, cpu_count, memory_mb, disk_free_mb, last_seen_at
+		SELECT id, name, address, COALESCE(owner_id, ''), status, agent_version, capabilities, cpu_count, memory_mb, disk_free_mb, last_seen_at
 		FROM servers WHERE id = $1
 	`, id).Scan(
-		&v.ID, &v.Name, &v.Address, &v.Status, &v.AgentVersion, &rawCapabilities,
+		&v.ID, &v.Name, &v.Address, &v.OwnerID, &v.Status, &v.AgentVersion, &rawCapabilities,
 		&v.CPUCount, &v.MemoryMB, &v.DiskFreeMB, &lastSeen,
 	)
 	if err != nil {
@@ -227,18 +227,33 @@ func (s ApplicationStore) List(ctx context.Context, ownerID string, limit, offse
 	return out, total, rows.Err()
 }
 
-// List returns servers ordered by name.
+// List returns servers ordered by name, across all owners. It is the
+// unscoped internal view; API reads go through the owner-scoped
+// ListFiltered.
 func (r ServerRepository) List(ctx context.Context, limit, offset int) ([]server.Record, int, error) {
-	return r.ListFiltered(ctx, "", limit, offset)
+	return r.list(ctx, nil, "", limit, offset)
 }
 
-// ListFiltered lists servers, optionally filtered by status.
-func (r ServerRepository) ListFiltered(ctx context.Context, status string, limit, offset int) ([]server.Record, int, error) {
+// ListFiltered lists the servers owned by ownerID, optionally filtered by
+// status. Ownership is matched strictly against the owner column coalesced
+// to the empty string, mirroring ApplicationStore.List: a caller never sees
+// another owner's records.
+func (r ServerRepository) ListFiltered(ctx context.Context, ownerID, status string, limit, offset int) ([]server.Record, int, error) {
+	return r.list(ctx, ownerID, status, limit, offset)
+}
+
+// list runs the shared listing query. A nil ownerID selects all owners;
+// a non-nil ownerID (including an empty string) restricts to that owner.
+func (r ServerRepository) list(ctx context.Context, ownerID any, status string, limit, offset int) ([]server.Record, int, error) {
 	var total int
-	if err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM servers WHERE ($1 = '' OR status = $1)`, status).Scan(&total); err != nil {
+	if err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM servers
+		WHERE ($1 = '' OR status = $1) AND ($2::text IS NULL OR COALESCE(owner_id, '') = $2)`,
+		status, ownerID).Scan(&total); err != nil {
 		return nil, 0, wrap("count servers", err)
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id FROM servers WHERE ($1 = '' OR status = $1) ORDER BY name, id LIMIT $2 OFFSET $3`, status, limit, offset)
+	rows, err := r.db.QueryContext(ctx, `SELECT id FROM servers
+		WHERE ($1 = '' OR status = $1) AND ($2::text IS NULL OR COALESCE(owner_id, '') = $2)
+		ORDER BY name, id LIMIT $3 OFFSET $4`, status, ownerID, limit, offset)
 	if err != nil {
 		return nil, 0, wrap("list servers", err)
 	}

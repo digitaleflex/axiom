@@ -40,12 +40,14 @@ func (s *Service) UpdateHealth(ctx context.Context, id string, health Health) er
 	return s.repo.UpdateHealth(ctx, id, health)
 }
 
-// ListFiltered lists servers, optionally filtered by status.
-func (s *Service) ListFiltered(ctx context.Context, status string, limit, offset int) ([]Record, int, error) {
+// ListFiltered lists the servers owned by ownerID, optionally filtered by
+// status. Ownership is strict (see Repository.ListFiltered): callers that
+// need a cross-owner view do not belong on this method.
+func (s *Service) ListFiltered(ctx context.Context, ownerID, status string, limit, offset int) ([]Record, int, error) {
 	if s == nil || s.repo == nil {
 		return nil, 0, fmt.Errorf("server repository is required")
 	}
-	return s.repo.ListFiltered(ctx, status, limit, offset)
+	return s.repo.ListFiltered(ctx, ownerID, status, limit, offset)
 }
 
 // ActiveDeployments counts deployments on the server that still need it.

@@ -42,7 +42,11 @@ type Record struct {
 type Repository interface {
 	Create(ctx context.Context, r Record) error
 	Get(ctx context.Context, id string) (Record, error)
-	ListFiltered(ctx context.Context, status string, limit, offset int) ([]Record, int, error)
+	// ListFiltered lists the servers owned by ownerID, optionally filtered
+	// by status. Ownership is matched strictly against the owner column
+	// coalesced to the empty string, so an empty ownerID only selects
+	// unowned records. Cross-owner listings are not part of this contract.
+	ListFiltered(ctx context.Context, ownerID, status string, limit, offset int) ([]Record, int, error)
 	Rename(ctx context.Context, id, name string) error
 	Delete(ctx context.Context, id string) error
 	// ActiveDeployments counts deployments on the server that are not

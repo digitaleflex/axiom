@@ -129,9 +129,14 @@ func (f *fakeServers) UpdateHealth(_ context.Context, id string, health server.H
 	return server.ErrNotFound
 }
 
-func (f *fakeServers) ListFiltered(_ context.Context, status string, limit, offset int) ([]server.Record, int, error) {
+// ListFiltered lists only the servers owned by ownerID (strict scope, like
+// the real store): an empty ownerID selects unowned records only.
+func (f *fakeServers) ListFiltered(_ context.Context, ownerID, status string, limit, offset int) ([]server.Record, int, error) {
 	var items []server.Record
 	for _, s := range f.items {
+		if s.OwnerID != ownerID {
+			continue
+		}
 		if status == "" || string(s.Status) == status {
 			items = append(items, s)
 		}

@@ -49,7 +49,7 @@ func openIsolated(t *testing.T) (*sql.DB, context.Context) {
 func TestServerLifecycle(t *testing.T) {
 	db, ctx := openIsolated(t)
 	repos := NewRepositories(db)
-	if _, err := db.ExecContext(ctx, `INSERT INTO users (id) VALUES ('usr_1')`); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO users (id) VALUES ('usr_1'), ('usr_2')`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -57,9 +57,15 @@ func TestServerLifecycle(t *testing.T) {
 	if err := repos.Servers.Create(ctx, rec); err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	if err := repos.Servers.Create(ctx, server.Record{ID: "srv_2", Name: "srv-eu-2", Address: "203.0.113.11", OwnerID: "usr_2", Status: server.StatusPending}); err != nil {
+		t.Fatalf("create srv_2: %v", err)
+	}
 	got, err := repos.Servers.Get(ctx, "srv_1")
 	if err != nil || got.Status != server.StatusPending {
 		t.Fatalf("get = %+v %v", got, err)
+	}
+	if got.OwnerID != "usr_1" {
+		t.Fatalf("get must return the owner: %+v", got)
 	}
 	if err := repos.Servers.Rename(ctx, "srv_1", "srv-eu-2"); err != nil {
 		t.Fatalf("rename: %v", err)
@@ -71,15 +77,29 @@ func TestServerLifecycle(t *testing.T) {
 		t.Fatalf("rename missing: %v", err)
 	}
 
-	items, total, err := repos.Servers.ListFiltered(ctx, "pending", 10, 0)
+	items, total, err := repos.Servers.ListFiltered(ctx, "usr_1", "pending", 10, 0)
 	if err != nil || total != 1 || len(items) != 1 {
 		t.Fatalf("filtered = %d %v %v", total, items, err)
 	}
-	if _, total, _ := repos.Servers.ListFiltered(ctx, "ready", 10, 0); total != 0 {
+	if items[0].OwnerID != "usr_1" {
+		t.Fatalf("filtered must return the caller's own server: %+v", items[0])
+	}
+	if _, total, _ := repos.Servers.ListFiltered(ctx, "usr_1", "ready", 10, 0); total != 0 {
 		t.Fatal("ready filter must be empty")
 	}
-	if _, total, _ := repos.Servers.ListFiltered(ctx, "", 10, 0); total != 1 {
-		t.Fatal("unfiltered must return all")
+	if _, total, _ := repos.Servers.ListFiltered(ctx, "usr_1", "", 10, 0); total != 1 {
+		t.Fatal("unfiltered must return all of the owner's servers")
+	}
+	// Owner scoping: a subject never sees another owner's servers.
+	if _, total, _ := repos.Servers.ListFiltered(ctx, "usr_2", "", 10, 0); total != 1 {
+		t.Fatal("usr_2 must only see their own server")
+	}
+	if items, _, _ := repos.Servers.ListFiltered(ctx, "usr_2", "", 10, 0); items[0].ID != "srv_2" {
+		t.Fatalf("usr_2 must not see usr_1's server: %+v", items)
+	}
+	// The unscoped internal view sees every owner.
+	if _, total, _ := repos.Servers.List(ctx, 10, 0); total != 2 {
+		t.Fatal("unscoped list must return every server")
 	}
 
 	// Health round-trip with capabilities.
