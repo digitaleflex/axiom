@@ -17,6 +17,7 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/webhook"
 	"github.com/digitaleflex/axiom/services/engine/internal/deployment"
 	"github.com/digitaleflex/axiom/services/engine/internal/diagnostics"
+	"github.com/digitaleflex/axiom/services/engine/internal/org"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
 )
 
@@ -65,6 +66,11 @@ type Deps struct {
 	AppConfig    AppConfig
 	// Agents owns agent registration and credential lifecycle (#76/#77).
 	Agents *agentauth.Service
+	// Orgs owns organizations, memberships and plan quotas (#146, M12.1). It is
+	// the ownership boundary every tenant-scoped resource is checked against. A
+	// nil service makes the organization endpoints answer 503 rather than
+	// serving an unowned resource.
+	Orgs *org.Service
 	// AgentKeys issues the per-agent operation signing key (ADR-0008). The
 	// plaintext key is returned to the agent exactly once, at registration and
 	// at every rotation. A nil service makes the agent registration endpoints
@@ -116,6 +122,7 @@ type API struct {
 	logs             LogStore
 	appConfig        AppConfig
 	agents           *agentauth.Service
+	orgs             *org.Service
 	agentKeys        AgentKeys
 	agentPollManager *agentpoll.Manager
 	runner           DeploymentRunner
@@ -133,6 +140,7 @@ func New(d Deps) http.Handler {
 		log: d.Log, auth: d.Auth, authSvc: d.Sessions, authz: d.Authz, auditSvc: d.Audit, deployments: d.Deployments,
 		applications: d.Applications, servers: d.Servers, github: d.GitHub, repos: d.Repositories, analyses: d.Analyses, plans: d.Plans, domains: d.Domains, logs: d.Logs, appConfig: d.AppConfig,
 		agents:           d.Agents,
+		orgs:             d.Orgs,
 		agentKeys:        d.AgentKeys,
 		agentPollManager: d.AgentPoll,
 		runner:           d.Runner,
