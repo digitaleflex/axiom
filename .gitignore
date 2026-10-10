@@ -1,0 +1,100 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Secrets — never commit these
+# ─────────────────────────────────────────────────────────────────────────────
+# Real environment files. Only *.example / *.template belong in the repository.
+.env
+.env.*
+!.env.example
+!.env.*.example
+!.env.template
+
+# Key material
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+cloudflare/
+acme.json
+letsencrypt/
+.github-app-private-key*
+
+# Anything that looks like a credential
+secrets/
+secrets.*
+*_secret*
+*_secrets*
+credentials.json
+service-account*.json
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Build output
+# ─────────────────────────────────────────────────────────────────────────────
+dist/
+build/
+out/
+.next/
+.turbo/
+*.tsbuildinfo
+next-env.d.ts
+
+# Compiled binaries (agent, engine, orchestrator)
+services/*/agent
+services/*/engine
+services/*/orchestrator
+services/*/cli
+*.exe
+
+# Build workspaces created by the Engine at runtime
+.axiom/
+axiom-build/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dependencies
+# ─────────────────────────────────────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+vendor/
+*.tgz
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Test & coverage output
+# ─────────────────────────────────────────────────────────────────────────────
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+*.coverprofile
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Editor & OS
+# ─────────────────────────────────────────────────────────────────────────────
+.vscode/
+!.vscode/settings.json.example
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local runtime data (Agent identity, credentials, operation state)
+data/
+tmp/
+*.pid
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Deployment artefacts — these are per-environment and infrastructure specific
+# ─────────────────────────────────────────────────────────────────────────────
+# Traefik certificates and dynamic configuration are server state, not source.
+services/engine/traefik/acme.json
+services/engine/traefik/certs/
