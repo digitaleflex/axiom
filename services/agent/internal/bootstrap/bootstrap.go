@@ -42,6 +42,7 @@ import (
 	"github.com/digitaleflex/axiom/services/agent/internal/security/auth"
 	"github.com/digitaleflex/axiom/services/agent/internal/security/operationkey"
 	"github.com/digitaleflex/axiom/services/agent/internal/security/ownership"
+	"github.com/digitaleflex/axiom/services/agent/internal/security/transport/longpoll"
 	"github.com/digitaleflex/axiom/services/agent/internal/state"
 )
 
@@ -80,6 +81,9 @@ type App struct {
 	Checker *health.Checker
 	// Heartbeat is the agent→Engine liveness loop; nil until registration.
 	Heartbeat *heartbeat.Loop
+	// LongPoll is the agent→Engine long-poll client for NAT mode (ADR-0008).
+	// It pulls operations from the Engine and dispatches them locally.
+	LongPoll *longpoll.LongPollClient
 	// Docker is the runtime adapter; Traefik the network adapter.
 	Docker  *docker.Adapter
 	Traefik *traefik.Adapter
@@ -417,24 +421,34 @@ func (a *App) Serve(ctx context.Context, ln net.Listener) error {
 	return nil
 }
 
-// startLoops runs the heartbeat in the background and records it in the wait
-// group so shutdown drains it.
+// startLoops runs the heartbeat and long-poll loops in the background and
+// records them in the wait group so shutdown drains them.
 func (a *App) startLoops(ctx context.Context) {
-	if a.Heartbeat == nil {
-		return
+	// Heartbeat loop (agent→Engine liveness).
+	if a.Heartbeat != nil {
+		a.wg.Add(1)
+		loopCtx, cancel := context.WithCancel(context.Background())
+		a.mu.Lock()
+		a.cancelLoops = cancel
+		a.mu.Unlock()
+		go func() {
+			defer a.wg.Done()
+			if err := a.Heartbeat.Run(loopCtx); err != nil && !errors.Is(err, context.Canceled) {
+				a.log.Error("heartbeat loop stopped", "error", err.Error())
+			}
+		}()
+		a.log.Info("heartbeat loop started", "interval", a.Heartbeat.Interval)
 	}
-	a.wg.Add(1)
-	loopCtx, cancel := context.WithCancel(context.Background())
-	a.mu.Lock()
-	a.cancelLoops = cancel
-	a.mu.Unlock()
-	go func() {
-		defer a.wg.Done()
-		if err := a.Heartbeat.Run(loopCtx); err != nil && !errors.Is(err, context.Canceled) {
-			a.log.Error("heartbeat loop stopped", "error", err.Error())
-		}
-	}()
-	a.log.Info("heartbeat loop started", "interval", a.Heartbeat.Interval)
+
+	// Long-poll loop (Engine→Agent operation dispatch, NAT mode per ADR-0008).
+	if a.LongPoll != nil {
+		a.wg.Add(1)
+		go func() {
+			defer a.wg.Done()
+			a.LongPoll.Run(ctx)
+		}()
+		a.log.Info("long-poll loop started")
+	}
 }
 
 // Close drains the background loops, reconciles, and releases the stores. It is

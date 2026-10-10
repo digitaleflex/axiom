@@ -15,6 +15,7 @@ import (
 	"github.com/digitaleflex/axiom/services/agent/internal/security/auth"
 	"github.com/digitaleflex/axiom/services/agent/internal/security/operationkey"
 	"github.com/digitaleflex/axiom/services/agent/internal/security/transport"
+	"github.com/digitaleflex/axiom/services/agent/internal/security/transport/longpoll"
 )
 
 // registerTimeout bounds the registration exchange.
@@ -163,6 +164,16 @@ func (a *App) register(ctx context.Context) error {
 		loop.Interval = interval
 		a.Heartbeat = loop
 	}
+
+	// The long-poll client needs the operation signing key (persisted above)
+	// and the issued agent identity. Create it now for NAT mode (ADR-0008).
+	if a.LongPoll == nil && a.OperationKeys != nil {
+		a.LongPoll = longpoll.NewLongPollClient(
+			a.cfg.EngineURL, a.Auth, a.OperationKeys,
+			out.AgentID, out.ServerID, a.Dispatcher, a.log,
+		)
+	}
+
 	a.log.Info("agent registered", "agentId", out.AgentID, "serverId", out.ServerID,
 		"credentialVersion", out.CredentialVersion, "negotiated", out.Negotiated,
 		"operationKeyIssued", out.OperationSigningKey != "",
