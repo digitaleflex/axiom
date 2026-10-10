@@ -71,6 +71,10 @@ type Deps struct {
 	// nil service makes the organization endpoints answer 503 rather than
 	// serving an unowned resource.
 	Orgs *org.Service
+	// Projects owns the client-facing project resource (#146, M12.1). Projects
+	// are always org-scoped: the organization comes from the route, never from
+	// the request body. A nil service makes the project endpoints answer 503.
+	Projects Projects
 	// AgentKeys issues the per-agent operation signing key (ADR-0008). The
 	// plaintext key is returned to the agent exactly once, at registration and
 	// at every rotation. A nil service makes the agent registration endpoints
@@ -123,6 +127,7 @@ type API struct {
 	appConfig        AppConfig
 	agents           *agentauth.Service
 	orgs             *org.Service
+	projects         Projects
 	agentKeys        AgentKeys
 	agentPollManager *agentpoll.Manager
 	runner           DeploymentRunner
@@ -141,6 +146,7 @@ func New(d Deps) http.Handler {
 		applications: d.Applications, servers: d.Servers, github: d.GitHub, repos: d.Repositories, analyses: d.Analyses, plans: d.Plans, domains: d.Domains, logs: d.Logs, appConfig: d.AppConfig,
 		agents:           d.Agents,
 		orgs:             d.Orgs,
+		projects:         d.Projects,
 		agentKeys:        d.AgentKeys,
 		agentPollManager: d.AgentPoll,
 		runner:           d.Runner,
@@ -186,6 +192,27 @@ func New(d Deps) http.Handler {
 	r.HandleFunc("GET /api/v1/repositories/{repositoryID}/refs", a.wrap(a.listRefs))
 	r.HandleFunc("GET "+githubCallbackPath, a.githubCallback) // public: protected by single-use state + browser cookie
 	r.HandleFunc("POST /api/v1/webhook/github", webhook.New(a.log).ServeHTTP)
+
+	// Organizations and projects (#146, M12.1). These are tenant-scoped: the
+	// organization is part of the path, so a caller cannot reach another tenant's
+	// resources by choosing a different body.
+	r.HandleFunc("GET /api/v1/orgs", a.wrap(a.listOrganizations))
+	r.HandleFunc("POST /api/v1/orgs", a.wrap(a.createOrganization))
+	r.HandleFunc("POST /api/v1/invitations/accept", a.wrap(a.acceptInvitation))
+	r.HandleFunc("GET /api/v1/orgs/{orgID}", a.wrap(a.getOrganization))
+	r.HandleFunc("PATCH /api/v1/orgs/{orgID}", a.wrap(a.updateOrganization))
+	r.HandleFunc("DELETE /api/v1/orgs/{orgID}", a.wrap(a.deleteOrganization))
+	r.HandleFunc("GET /api/v1/orgs/{orgID}/members", a.wrap(a.listOrganizationMembers))
+	r.HandleFunc("PATCH /api/v1/orgs/{orgID}/members/{userID}", a.wrap(a.changeMemberRole))
+	r.HandleFunc("DELETE /api/v1/orgs/{orgID}/members/{userID}", a.wrap(a.removeOrganizationMember))
+	r.HandleFunc("GET /api/v1/orgs/{orgID}/invitations", a.wrap(a.listOrganizationInvitations))
+	r.HandleFunc("POST /api/v1/orgs/{orgID}/invitations", a.wrap(a.inviteOrganizationMember))
+	r.HandleFunc("DELETE /api/v1/orgs/{orgID}/invitations/{invitationID}", a.wrap(a.revokeOrganizationInvitation))
+	r.HandleFunc("GET /api/v1/orgs/{orgID}/projects", a.wrap(a.listProjects))
+	r.HandleFunc("POST /api/v1/orgs/{orgID}/projects", a.wrap(a.createProject))
+	r.HandleFunc("GET /api/v1/orgs/{orgID}/projects/{projectID}", a.wrap(a.getProject))
+	r.HandleFunc("PATCH /api/v1/orgs/{orgID}/projects/{projectID}", a.wrap(a.updateProject))
+	r.HandleFunc("DELETE /api/v1/orgs/{orgID}/projects/{projectID}", a.wrap(a.deleteProject))
 
 	r.HandleFunc("GET /api/v1/applications", a.wrap(a.listApplications))
 	r.HandleFunc("POST /api/v1/applications", a.wrap(a.createApplication))

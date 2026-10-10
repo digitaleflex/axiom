@@ -44,6 +44,7 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/observability/metrics"
 	"github.com/digitaleflex/axiom/services/engine/internal/org"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner"
+	"github.com/digitaleflex/axiom/services/engine/internal/project"
 	appconfig "github.com/digitaleflex/axiom/services/engine/internal/secrets"
 	"github.com/digitaleflex/axiom/services/engine/internal/security/secrets"
 	"github.com/digitaleflex/axiom/services/engine/internal/server"
@@ -216,7 +217,19 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 	// Organizations (#146, M12.1): the ownership boundary that replaces the V0.1
 	// single-user model. Quota checks and invitations run through this service so
 	// the plan allowance and the last-owner rule are enforced in one place.
-	deps.Orgs = &org.Service{Store: org.PGStore{DB: db}}
+	orgSvc := &org.Service{Store: org.PGStore{DB: db}}
+	deps.Orgs = orgSvc
+	// Projects (#146, M12.1): the client-facing unit, always org-scoped.
+	//
+	// The two seams are adapters rather than a direct dependency. project must
+	// not import org: a caller of the project service branches on project errors
+	// alone, and the quota sentinel is translated here so both packages keep a
+	// single meaning for "quota exceeded".
+	deps.Projects = &project.Service{
+		Store: project.PGStore{DB: db},
+		Quota: quotaAdapter{orgs: orgSvc},
+		Authz: roleAdapter{orgs: orgSvc},
+	}
 	// Agent poll manager for NAT mode (ADR-0008): the Engine pushes operations
 	// to a per-agent queue; the agent long-polls via POST /api/v1/agent/poll.
 	deps.AgentPoll = agentpoll.NewManager()
@@ -296,6 +309,32 @@ func newRunner(cfg config.Config, log *slog.Logger, deps api.Deps, logStore logs
 	// went offline between plan review and execution must not receive work.
 	planExecutor.Servers = deps.Servers
 	return executor.NewRunner(planExecutor)
+}
+
+// quotaAdapter translates the organization quota sentinel into the project one,
+// so the project package never has to import org and callers still branch on a
+// single error. A non-quota failure is passed through untouched.
+type quotaAdapter struct{ orgs *org.Service }
+
+func (q quotaAdapter) CheckProjectQuota(ctx context.Context, orgID string) error {
+	err := q.orgs.CheckProjectQuota(ctx, orgID)
+	if errors.Is(err, org.ErrQuotaExceeded) {
+		return fmt.Errorf("%w: the plan's project allowance is spent", project.ErrQuotaExceeded)
+	}
+	return err
+}
+
+// roleAdapter resolves a user's role for the project service. An unknown role is
+// reported as viewer, the lowest privilege: a role the Engine does not recognise
+// must never be treated as sufficient.
+type roleAdapter struct{ orgs *org.Service }
+
+func (r roleAdapter) MemberRole(ctx context.Context, orgID, userID string) (project.Role, error) {
+	role, err := r.orgs.MemberRole(ctx, orgID, userID)
+	if err != nil {
+		return "", err
+	}
+	return project.Role(role), nil
 }
 
 // buildEvents forwards build lifecycle events to the structured log (#101).
