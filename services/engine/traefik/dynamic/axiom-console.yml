@@ -1,0 +1,68 @@
+# Static Traefik config for Axiom Console (main domain)
+# This file is managed manually; per-deployment configs are managed by the Agent
+# via axiom-<deploymentID>.yml files in the same directory.
+
+http:
+  routers:
+    # Axiom Cloud Console (main domain)
+    axiom-console-web:
+      rule: "Host(`axiom.eurinhash.com`)"
+      entryPoints:
+        - web
+      middlewares:
+        - axiom-console-redirect
+      service: axiom-console
+
+    axiom-console-websecure:
+      rule: "Host(`axiom.eurinhash.com`)"
+      entryPoints:
+        - websecure
+      service: axiom-console
+      tls:
+        certResolver: le
+
+    # API subdomain
+    axiom-api-web:
+      rule: "Host(`api.axiom.eurinhash.com`)"
+      entryPoints:
+        - web
+      middlewares:
+        - axiom-api-redirect
+      service: axiom-api
+
+    axiom-api-websecure:
+      rule: "Host(`api.axiom.eurinhash.com`)"
+      entryPoints:
+        - websecure
+      service: axiom-api
+      tls:
+        certResolver: le
+
+  middlewares:
+    # Redirect HTTP -> HTTPS for console
+    axiom-console-redirect:
+      redirectScheme:
+        scheme: https
+        permanent: true
+
+    # Redirect HTTP -> HTTPS for API
+    axiom-api-redirect:
+      redirectScheme:
+        scheme: https
+        permanent: true
+
+  services:
+    # Console service (pointing to Cloud Console container - run separately)
+    # Update this when you deploy the Cloud Console
+    axiom-console:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:5173"  # Vite dev server on host
+        passHostHeader: true
+
+    # Engine API service
+    axiom-api:
+      loadBalancer:
+        servers:
+          - url: "http://engine:8080"
+        passHostHeader: true

@@ -1,4 +1,60 @@
+# Axiom Local Development Stack with Traefik
+# Usage: docker compose -f docker-compose.dev.yml up -d
+#
+# Prerequisites:
+# 1. Domain axiom.eurinhash.com DNS A record -> your server IP
+# 2. Ports 80, 443, 8080 open on firewall
+# 3. Traefik dashboard at http://localhost:8081 (dev only)
+
 services:
+  # ──────────────────────────────────────────────────────────────
+  # Traefik Reverse Proxy + ACME (Let's Encrypt)
+  # ──────────────────────────────────────────────────────────────
+  traefik:
+    image: traefik:v3.0
+    container_name: axiom-traefik
+    restart: unless-stopped
+    command:
+      # Entry points
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      # Providers
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+      # API / Dashboard
+      - "--api.dashboard=true"
+      - "--api.insecure=true"  # Dev only! Disable in production
+      # Certificates (Let's Encrypt)
+      - "--certificatesresolvers.le.acme.email=admin@eurinhash.com"
+      - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.le.acme.httpchallenge.entrypoint=web"
+      # Logging
+      - "--log.level=INFO"
+      - "--accesslog=true"
+    ports:
+      - "80:80"       # HTTP (ACME challenge + redirect)
+      - "443:443"     # HTTPS
+      - "8081:8080"   # Dashboard (localhost only)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-letsencrypt:/letsencrypt
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+    networks:
+      - axiom-network
+    labels:
+      # Traefik dashboard
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.localhost`)"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=web"
+
+  # ──────────────────────────────────────────────────────────────
+  # PostgreSQL
+  # ──────────────────────────────────────────────────────────────
   postgres:
     image: postgres:17-alpine
     container_name: axiom-engine-postgres
@@ -16,6 +72,81 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    networks:
+      - axiom-network
+
+  # ──────────────────────────────────────────────────────────────
+  # Axiom Engine (API)
+  # ──────────────────────────────────────────────────────────────
+  engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: axiom-engine
+    restart: unless-stopped
+    environment:
+      - AXIOM_ENV=development
+      - AXIOM_ENGINE_HOST=0.0.0.0
+      - AXIOM_ENGINE_PORT=8080
+      - DATABASE_URL=postgres://axiom:axiom@postgres:5432/axiom?sslmode=disable
+      - AXIOM_DB_REQUIRED=true
+      - AXIOM_API_TOKEN=dev-token-12345
+      - AXIOM_SECRET_KEY=hZhSurh2b1DMddWFzgGhGp8zrdAoTnbvUV6brhONS5U=
+      - AXIOM_CONSOLE_URL=https://axiom.eurinhash.com
+      - AXIOM_DOCKER_BINARY=docker
+      - AXIOM_LOG_LEVEL=info
+    ports:
+      - "8080:8080"  # Engine API
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # For Docker builds
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - axiom-network
+    labels:
+      # Traefik: expose Engine API at api.axiom.eurinhash.com (optional)
+      - "traefik.enable=true"
+      - "traefik.http.routers.engine-api.rule=Host(`api.axiom.eurinhash.com`)"
+      - "traefik.http.routers.engine-api.entrypoints=websecure"
+      - "traefik.http.routers.engine-api.tls.certresolver=le"
+      - "traefik.http.services.engine-api.loadbalancer.server.port=8080"
+
+  # ──────────────────────────────────────────────────────────────
+  # Axiom Runtime Agent (optional - for local agent testing)
+  # ──────────────────────────────────────────────────────────────
+  agent:
+    build:
+      context: ../agent
+      dockerfile: Dockerfile
+    container_name: axiom-agent
+    restart: unless-stopped
+    environment:
+      - AXIOM_ENV=development
+      - AXIOM_VERSION=0.1.0-dev
+      - AXIOM_ENGINE_URL=http://engine:8080
+      - AXIOM_AGENT_TOKEN=ac_test
+      - AXIOM_SERVER_ID=srv_local
+      - AXIOM_AGENT_DATA_DIR=/data
+      - AXIOM_TRAEFIK_DYNAMIC_DIR=/etc/traefik/dynamic
+      - AXIOM_AGENT_LISTEN_ADDR=0.0.0.0:9401
+      - AXIOM_DOCKER_BINARY=docker
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - agent-data:/data
+      - ./traefik/dynamic:/etc/traefik/dynamic  # Shared with Traefik
+    depends_on:
+      - engine
+      - traefik
+    networks:
+      - axiom-network
+    # No ports exposed - agent communicates via Docker network
+
+networks:
+  axiom-network:
+    driver: bridge
 
 volumes:
   axiom-postgres-data:
+  traefik-letsencrypt:
+  agent-data:
