@@ -20,6 +20,7 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/agentauth"
 	"github.com/digitaleflex/axiom/services/engine/internal/agentclient"
 	"github.com/digitaleflex/axiom/services/engine/internal/agentkey"
+	"github.com/digitaleflex/axiom/services/engine/internal/agentpoll"
 	"github.com/digitaleflex/axiom/services/engine/internal/analysis"
 	"github.com/digitaleflex/axiom/services/engine/internal/api"
 	"github.com/digitaleflex/axiom/services/engine/internal/api/sse"
@@ -41,6 +42,7 @@ import (
 	"github.com/digitaleflex/axiom/services/engine/internal/httpserver"
 	"github.com/digitaleflex/axiom/services/engine/internal/logs"
 	"github.com/digitaleflex/axiom/services/engine/internal/observability/metrics"
+	"github.com/digitaleflex/axiom/services/engine/internal/org"
 	"github.com/digitaleflex/axiom/services/engine/internal/planner"
 	appconfig "github.com/digitaleflex/axiom/services/engine/internal/secrets"
 	"github.com/digitaleflex/axiom/services/engine/internal/security/secrets"
@@ -211,6 +213,13 @@ func buildAPIDeps(ctx context.Context, cfg config.Config, log *slog.Logger, db *
 	// Audit trail (#128): privileged operation events, persisted redacted.
 	deps.Audit = audit.NewService(audit.NewPGStore(db))
 	deps.Plans = &planner.Service{Engine: planner.New(), Profiles: analysis.PGStore{DB: db}, Servers: deps.Servers, Domains: domainService, DB: db, NewID: deployment.NewID}
+	// Organizations (#146, M12.1): the ownership boundary that replaces the V0.1
+	// single-user model. Quota checks and invitations run through this service so
+	// the plan allowance and the last-owner rule are enforced in one place.
+	deps.Orgs = &org.Service{Store: org.PGStore{DB: db}}
+	// Agent poll manager for NAT mode (ADR-0008): the Engine pushes operations
+	// to a per-agent queue; the agent long-polls via POST /api/v1/agent/poll.
+	deps.AgentPoll = agentpoll.NewManager()
 	if cfg.GitHub.Enabled() {
 		key, err := secrets.ParseKey(cfg.SecretKey)
 		if err != nil {
@@ -264,15 +273,23 @@ func newRunner(cfg config.Config, log *slog.Logger, deps api.Deps, logStore logs
 		Log:        buildEvents{log: log},
 		LogStore:   logStore,
 	}
-	agent := &agentclient.Client{
-		Servers: deps.Servers,
-		// ADR-0008: the Engine→Agent leg is authenticated by a per-agent HMAC
-		// signature, not by a bearer credential. Credentials stays unset and
-		// non-blocking; the signature material comes from agentKeys.
-		SigningKeys: signingKeys{keys: agentKeys, agents: deps.Agents},
-		Production:  cfg.Env == config.EnvProduction,
-		Log:         log,
+
+	signingKeys := signingKeys{keys: agentKeys, agents: deps.Agents}
+
+	var agent executor.RuntimeAgent
+	if deps.AgentPoll != nil {
+		// NAT mode: push operations to agentpoll queue; agent long-polls.
+		agent = agentclient.NewNATAgent(deps.AgentPoll, deps.Servers, signingKeys, log)
+	} else {
+		// Loopback mode: direct HTTP to agent endpoint.
+		agent = &agentclient.Client{
+			Servers:     deps.Servers,
+			SigningKeys: signingKeys,
+			Production:  cfg.Env == config.EnvProduction,
+			Log:         log,
+		}
 	}
+
 	planExecutor := executor.New(deps.Deployments, buildEngine, agent)
 	planExecutor.Log = log
 	// Re-verify server eligibility right before dispatching: a server that
