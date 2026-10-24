@@ -119,11 +119,19 @@ func (s PGStore) List(ctx context.Context, orgID string, limit, offset int) ([]R
 		}
 		r.Environment = Environment(env)
 		r.ApplicationID = apps.String
-		r.DeploymentID, _ = s.servingDeployment(ctx, orgID, r.ID)
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("project: iterate: %w", err)
+	}
+	// Release the cursor before the per-project lookups: issuing them while
+	// rows is open needs a second connection per project and deadlocks a
+	// single-connection pool.
+	if err := rows.Close(); err != nil {
+		return nil, 0, fmt.Errorf("project: close rows: %w", err)
+	}
+	for i := range out {
+		out[i].DeploymentID, _ = s.servingDeployment(ctx, orgID, out[i].ID)
 	}
 	return out, total, nil
 }

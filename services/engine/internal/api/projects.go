@@ -8,12 +8,13 @@ import (
 
 	"github.com/digitaleflex/axiom/services/engine/internal/project"
 )
+
 // Projects manages the client-facing project resource (#146, M12.1). It is
 // satisfied by *project.Service.
 type Projects interface {
 	Create(ctx context.Context, in project.CreateInput) (project.Record, error)
-	Get(ctx context.Context, orgID, id string) (project.Record, error)
-	List(ctx context.Context, orgID string, limit, offset int) ([]project.Record, int, error)
+	Get(ctx context.Context, orgID, requesterID, id string) (project.Record, error)
+	List(ctx context.Context, orgID, requesterID string, limit, offset int) ([]project.Record, int, error)
 	Update(ctx context.Context, orgID, requesterID, id string, in project.UpdateInput) (project.Record, error)
 	Delete(ctx context.Context, orgID, requesterID, id string) error
 }
@@ -30,7 +31,7 @@ func (a *API) listProjects(w http.ResponseWriter, r *http.Request) error {
 	orgID := r.PathValue("orgID")
 	limit := queryInt(r, "limit", 50)
 	offset := queryInt(r, "offset", 0)
-	items, total, err := a.projects.List(r.Context(), orgID, limit, offset)
+	items, total, err := a.projects.List(r.Context(), orgID, principal(r.Context()).UserID, limit, offset)
 	if err != nil {
 		return fromProjectErr(err)
 	}
@@ -82,7 +83,7 @@ func (a *API) getProject(w http.ResponseWriter, r *http.Request) error {
 	if a.projects == nil {
 		return errUnavailable
 	}
-	rec, err := a.projects.Get(r.Context(), r.PathValue("orgID"), r.PathValue("projectID"))
+	rec, err := a.projects.Get(r.Context(), r.PathValue("orgID"), principal(r.Context()).UserID, r.PathValue("projectID"))
 	if err != nil {
 		return fromProjectErr(err)
 	}

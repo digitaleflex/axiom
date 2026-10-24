@@ -26,6 +26,33 @@ type Organizations interface {
 	RevokeInvitation(ctx context.Context, orgID, requesterID, invitationID string) error
 }
 
+// organizationDTO is the organization projection returned to clients. The
+// billing customer id is an internal payment-provider reference and is not
+// returned.
+type organizationDTO struct {
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Slug      string     `json:"slug"`
+	Plan      string     `json:"plan"`
+	Limits    org.Limits `json:"limits"`
+	Usage     org.Usage  `json:"usage"`
+	CreatedAt string     `json:"createdAt"`
+	UpdatedAt string     `json:"updatedAt"`
+}
+
+func toOrganizationDTO(rec org.Record) organizationDTO {
+	return organizationDTO{
+		ID:        rec.ID,
+		Name:      rec.Name,
+		Slug:      rec.Slug,
+		Plan:      string(rec.Plan),
+		Limits:    rec.Limits,
+		Usage:     rec.Usage,
+		CreatedAt: rec.CreatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt: rec.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
+	}
+}
+
 // memberDTO is the membership projection returned to clients. It carries no
 // secret: a member row is exactly a role.
 type memberDTO struct {
@@ -89,9 +116,13 @@ func (a *API) listOrganizations(w http.ResponseWriter, r *http.Request) error {
 	}
 	items, err := a.orgs.ListForUser(r.Context(), principal(r.Context()).UserID)
 	if err != nil {
-		return err
+		return fromOrgErr(err)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	out := make([]organizationDTO, 0, len(items))
+	for _, rec := range items {
+		out = append(out, toOrganizationDTO(rec))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": out})
 	return nil
 }
 
@@ -107,7 +138,7 @@ func (a *API) createOrganization(w http.ResponseWriter, r *http.Request) (err er
 		Plan string `json:"plan"`
 	}
 	if err := decodeJSON(w, r, &in); err != nil {
-		return err
+		return fromOrgErr(err)
 	}
 	rec, err := a.orgs.Create(r.Context(), org.CreateInput{
 		OwnerID: principal(r.Context()).UserID,
@@ -116,10 +147,10 @@ func (a *API) createOrganization(w http.ResponseWriter, r *http.Request) (err er
 		Plan:    org.Plan(in.Plan),
 	})
 	if err != nil {
-		return err
+		return fromOrgErr(err)
 	}
 	w.Header().Set("Location", "/api/v1/orgs/"+rec.ID)
-	writeJSON(w, http.StatusCreated, rec)
+	writeJSON(w, http.StatusCreated, toOrganizationDTO(rec))
 	return nil
 }
 
@@ -129,9 +160,9 @@ func (a *API) getOrganization(w http.ResponseWriter, r *http.Request) error {
 	}
 	rec, err := a.orgs.Get(r.Context(), r.PathValue("orgID"), principal(r.Context()).UserID)
 	if err != nil {
-		return err
+		return fromOrgErr(err)
 	}
-	writeJSON(w, http.StatusOK, rec)
+	writeJSON(w, http.StatusOK, toOrganizationDTO(rec))
 	return nil
 }
 
@@ -146,14 +177,14 @@ func (a *API) updateOrganization(w http.ResponseWriter, r *http.Request) (err er
 		Plan string `json:"plan"`
 	}
 	if err := decodeJSON(w, r, &in); err != nil {
-		return err
+		return fromOrgErr(err)
 	}
 	rec, err := a.orgs.Update(r.Context(), target, principal(r.Context()).UserID,
 		org.UpdateInput{Name: in.Name, Plan: org.Plan(in.Plan)})
 	if err != nil {
-		return err
+		return fromOrgErr(err)
 	}
-	writeJSON(w, http.StatusOK, rec)
+	writeJSON(w, http.StatusOK, toOrganizationDTO(rec))
 	return nil
 }
 
@@ -164,7 +195,7 @@ func (a *API) deleteOrganization(w http.ResponseWriter, r *http.Request) (err er
 		return errUnavailable
 	}
 	if err := a.orgs.Delete(r.Context(), target, principal(r.Context()).UserID); err != nil {
-		return err
+		return fromOrgErr(err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
@@ -176,7 +207,7 @@ func (a *API) listOrganizationMembers(w http.ResponseWriter, r *http.Request) er
 	}
 	members, err := a.orgs.ListMembers(r.Context(), r.PathValue("orgID"), principal(r.Context()).UserID)
 	if err != nil {
-		return err
+		return fromOrgErr(err)
 	}
 	out := make([]memberDTO, 0, len(members))
 	for _, m := range members {
@@ -196,11 +227,11 @@ func (a *API) changeMemberRole(w http.ResponseWriter, r *http.Request) (err erro
 		Role string `json:"role"`
 	}
 	if err := decodeJSON(w, r, &in); err != nil {
-		return err
+		return fromOrgErr(err)
 	}
 	if err := a.orgs.ChangeRole(r.Context(), r.PathValue("orgID"), principal(r.Context()).UserID,
 		r.PathValue("userID"), org.Role(in.Role)); err != nil {
-		return err
+		return fromOrgErr(err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
@@ -214,7 +245,7 @@ func (a *API) removeOrganizationMember(w http.ResponseWriter, r *http.Request) (
 	}
 	if err := a.orgs.RemoveMember(r.Context(), r.PathValue("orgID"), principal(r.Context()).UserID,
 		r.PathValue("userID")); err != nil {
-		return err
+		return fromOrgErr(err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
@@ -236,7 +267,7 @@ func (a *API) inviteOrganizationMember(w http.ResponseWriter, r *http.Request) (
 		Role  string `json:"role"`
 	}
 	if err := decodeJSON(w, r, &in); err != nil {
-		return err
+		return fromOrgErr(err)
 	}
 	inv, err := a.orgs.Invite(r.Context(), org.InviteInput{
 		OrgID:     orgID,
@@ -245,7 +276,7 @@ func (a *API) inviteOrganizationMember(w http.ResponseWriter, r *http.Request) (
 		Role:      org.Role(in.Role),
 	})
 	if err != nil {
-		return err
+		return fromOrgErr(err)
 	}
 	dto := toInvitationDTO(inv.Invitation)
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -262,7 +293,7 @@ func (a *API) listOrganizationInvitations(w http.ResponseWriter, r *http.Request
 	}
 	invs, err := a.orgs.ListInvitations(r.Context(), r.PathValue("orgID"), principal(r.Context()).UserID)
 	if err != nil {
-		return err
+		return fromOrgErr(err)
 	}
 	out := make([]invitationDTO, 0, len(invs))
 	for _, i := range invs {
@@ -280,7 +311,7 @@ func (a *API) revokeOrganizationInvitation(w http.ResponseWriter, r *http.Reques
 	}
 	if err := a.orgs.RevokeInvitation(r.Context(), r.PathValue("orgID"), principal(r.Context()).UserID,
 		r.PathValue("invitationID")); err != nil {
-		return err
+		return fromOrgErr(err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
@@ -301,13 +332,13 @@ func (a *API) acceptInvitation(w http.ResponseWriter, r *http.Request) (err erro
 		Token string `json:"token"`
 	}
 	if err := decodeJSON(w, r, &in); err != nil {
-		return err
+		return fromOrgErr(err)
 	}
 	rec, err := a.orgs.AcceptInvitation(r.Context(), in.Token, principal(r.Context()).UserID)
 	if err != nil {
-		return err
+		return fromOrgErr(err)
 	}
-	writeJSON(w, http.StatusOK, rec)
+	writeJSON(w, http.StatusOK, toOrganizationDTO(rec))
 	return nil
 }
 

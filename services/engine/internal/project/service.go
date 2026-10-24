@@ -165,22 +165,23 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Record, error) {
 }
 
 // Get returns a project the caller may read.
-func (s *Service) Get(ctx context.Context, orgID, id string) (Record, error) {
-	if orgID == "" {
-		return Record{}, ErrOrgRequired
+func (s *Service) Get(ctx context.Context, orgID, requesterID, id string) (Record, error) {
+	// Read access needs only membership, so a viewer can read a project. The
+	// store is org-scoped, but the organization comes from the caller, so
+	// membership must be checked here or any user could read any tenant.
+	if err := s.authorizeAtLeast(ctx, orgID, requesterID, "viewer"); err != nil {
+		return Record{}, err
 	}
 	if id == "" {
 		return Record{}, ErrNotFound
 	}
-	// Read access needs only membership, so a viewer can read a project. The
-	// store is org-scoped, which is what actually prevents cross-tenant reads.
 	return s.Store.Get(ctx, orgID, id)
 }
 
 // List returns the organization's projects.
-func (s *Service) List(ctx context.Context, orgID string, limit, offset int) ([]Record, int, error) {
-	if orgID == "" {
-		return nil, 0, ErrOrgRequired
+func (s *Service) List(ctx context.Context, orgID, requesterID string, limit, offset int) ([]Record, int, error) {
+	if err := s.authorizeAtLeast(ctx, orgID, requesterID, "viewer"); err != nil {
+		return nil, 0, err
 	}
 	if limit <= 0 || limit > 200 {
 		limit = 50
@@ -300,6 +301,13 @@ func (s *Service) servingDeploymentOf(ctx context.Context, orgID, id string) (st
 // configuration: a single-user Engine has no organization roles to consult, and
 // failing closed there would lock the operator out of their own deployment.
 func (s *Service) authorize(ctx context.Context, orgID, requesterID string) error {
+	return s.authorizeAtLeast(ctx, orgID, requesterID, RequiredRole)
+}
+
+// authorizeAtLeast requires the caller to hold at least the given role. A
+// caller below it, or outside the organization, is told the resource does not
+// exist.
+func (s *Service) authorizeAtLeast(ctx context.Context, orgID, requesterID string, min Role) error {
 	if orgID == "" {
 		return ErrOrgRequired
 	}
@@ -319,7 +327,7 @@ func (s *Service) authorize(ctx context.Context, orgID, requesterID string) erro
 		}
 		return err
 	}
-	if roleRank[role] < roleRank[RequiredRole] {
+	if roleRank[role] < roleRank[min] {
 		return ErrNotFound
 	}
 	return nil

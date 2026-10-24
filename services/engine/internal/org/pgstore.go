@@ -48,15 +48,22 @@ func (s PGStore) Create(ctx context.Context, r Record) error {
 	return nil
 }
 
+// Get returns the organization with usage.projects recomputed from the projects
+// table. The stored usage document is a snapshot nothing keeps current for
+// projects, and the plan's project allowance is enforced from it.
 func (s PGStore) Get(ctx context.Context, id string) (Record, error) {
 	return s.scanOne(ctx,
-		`SELECT id, name, slug, plan, limits, usage, coalesce(billing_customer_id,''), created_at, updated_at
+		`SELECT id, name, slug, plan, limits,
+		        jsonb_set(usage, '{projects}', to_jsonb((SELECT count(*) FROM projects p WHERE p.org_id = organizations.id))),
+		        coalesce(billing_customer_id,''), created_at, updated_at
 		 FROM organizations WHERE id = $1`, id)
 }
 
 func (s PGStore) GetBySlug(ctx context.Context, slug string) (Record, error) {
 	return s.scanOne(ctx,
-		`SELECT id, name, slug, plan, limits, usage, coalesce(billing_customer_id,''), created_at, updated_at
+		`SELECT id, name, slug, plan, limits,
+		        jsonb_set(usage, '{projects}', to_jsonb((SELECT count(*) FROM projects p WHERE p.org_id = organizations.id))),
+		        coalesce(billing_customer_id,''), created_at, updated_at
 		 FROM organizations WHERE slug = $1`, slug)
 }
 
@@ -118,7 +125,8 @@ func (s PGStore) Delete(ctx context.Context, id string) error {
 
 func (s PGStore) ListForUser(ctx context.Context, userID string) ([]Record, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT o.id, o.name, o.slug, o.plan, o.limits, o.usage,
+		SELECT o.id, o.name, o.slug, o.plan, o.limits,
+		       jsonb_set(o.usage, '{projects}', to_jsonb((SELECT count(*) FROM projects p WHERE p.org_id = o.id))),
 		       coalesce(o.billing_customer_id,''), o.created_at, o.updated_at
 		  FROM organizations o
 		  JOIN organization_members m ON m.org_id = o.id

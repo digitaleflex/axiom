@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -117,7 +118,7 @@ type quotaAdapter struct{ s *org.Service }
 func (q quotaAdapter) CheckProjectQuota(ctx context.Context, orgID string) error {
 	err := q.s.CheckProjectQuota(ctx, orgID)
 	if errors.Is(err, org.ErrQuotaExceeded) {
-		return errors.New("project quota exceeded: " + err.Error())
+		return fmt.Errorf("%w: the plan's project allowance is spent", project.ErrQuotaExceeded)
 	}
 	return err
 }
@@ -131,6 +132,9 @@ type roleAdapter struct{ s *org.Service }
 func (r roleAdapter) MemberRole(ctx context.Context, orgID, userID string) (project.Role, error) {
 	role, err := r.s.MemberRole(ctx, orgID, userID)
 	if err != nil {
+		if errors.Is(err, org.ErrNotAMember) || errors.Is(err, org.ErrNotFound) {
+			return "", project.ErrNotFound
+		}
 		return "", err
 	}
 	return project.Role(role), nil
@@ -226,7 +230,7 @@ func TestCrossTenantIsolation(t *testing.T) {
 	// A tenant the API caller does not belong to.
 	other := oh.newOrg("usr_other", "Other Corp", org.PlanPro)
 	otherProject, err := oh.projs.Create(context.Background(), project.CreateInput{
-		OrgID: other.ID, Name: "secret-app", Slug: "secret-app",
+		OrgID: other.ID, RequesterID: "usr_other", Name: "secret-app", Slug: "secret-app",
 	})
 	if err != nil {
 		t.Fatalf("seed foreign project: %v", err)
@@ -248,7 +252,7 @@ func TestCrossTenantIsolation(t *testing.T) {
 	if err != nil || rec.Name != "Other Corp" {
 		t.Errorf("foreign org mutated: %+v (err=%v)", rec, err)
 	}
-	still, err := oh.projs.Get(context.Background(), other.ID, otherProject.ID)
+	still, err := oh.projs.Get(context.Background(), other.ID, "usr_other", otherProject.ID)
 	if err != nil || still.Name != "secret-app" {
 		t.Errorf("foreign project mutated: %+v (err=%v)", still, err)
 	}
@@ -261,7 +265,7 @@ func TestProjectRoutes(t *testing.T) {
 	acme := oh.newOrg("usr_1", "Acme", org.PlanPro)
 
 	r := h.do("POST", "/api/v1/orgs/"+acme.ID+"/projects", map[string]any{
-		"name": "Web App", "description": "the front end", "environment": "staging",
+		"name": "web-app", "description": "the front end", "environment": "staging",
 	}, nil)
 	expect(t, r, 201, "")
 	if r.body["slug"] != "web-app" {
@@ -290,7 +294,7 @@ func TestProjectRoutes(t *testing.T) {
 	expect(t, h.do("GET", "/api/v1/orgs/"+acme.ID+"/projects?limit=notanumber", nil, nil), 200, "")
 
 	// A duplicate slug inside the organization conflicts.
-	expect(t, h.do("POST", "/api/v1/orgs/"+acme.ID+"/projects", map[string]any{"name": "Web App"}, nil), 409, CodeConflict)
+	expect(t, h.do("POST", "/api/v1/orgs/"+acme.ID+"/projects", map[string]any{"name": "web-app"}, nil), 409, CodeConflict)
 
 	// Validation errors name the offending field.
 	r = h.do("POST", "/api/v1/orgs/"+acme.ID+"/projects", map[string]any{"name": "bad name"}, nil)
@@ -398,9 +402,14 @@ func TestMemberAndInvitationRoutes(t *testing.T) {
 	if inv["status"] != "pending" || inv["email"] != "dev@acme.dev" {
 		t.Fatalf("invitation = %v", inv)
 	}
-	// A viewer may not invite.
+	// A viewer may not invite. The API caller (usr_1) is the owner, so the
+	// viewer rule is proven through the service.
 	oh.addMember(acme.ID, "usr_viewer", org.RoleViewer)
-	expect(t, h.do("POST", "/api/v1/orgs/"+acme.ID+"/invitations", map[string]any{"email": "v@acme.dev"}, nil), 404, CodeNotFound)
+	if _, err := oh.orgs.Invite(context.Background(), org.InviteInput{
+		OrgID: acme.ID, InviterID: "usr_viewer", Email: "v@acme.dev", Role: org.RoleViewer,
+	}); !errors.Is(err, org.ErrNotAMember) {
+		t.Errorf("viewer invited a member: err = %v, want ErrNotAMember", err)
+	}
 
 	// Validation.
 	r = h.do("POST", "/api/v1/orgs/"+acme.ID+"/invitations", map[string]any{"email": "not-an-email"}, nil)
@@ -425,26 +434,31 @@ func TestMemberAndInvitationRoutes(t *testing.T) {
 func TestAcceptInvitationRoute(t *testing.T) {
 	oh := newOrgHarness(t)
 	h := oh.h
-	acme := oh.newOrg("usr_1", "Acme", org.PlanPro)
-
-	r := h.do("POST", "/api/v1/orgs/"+acme.ID+"/invitations", map[string]any{
-		"email": "dev@acme.dev", "role": "developer",
-	}, nil)
-	expect(t, r, 201, "")
-	token := r.body["token"].(string)
+	// The API caller (usr_1) is the invitee, so the organization belongs to
+	// someone else and usr_1 is not yet a member.
+	acme := oh.newOrg("usr_other", "Acme", org.PlanPro)
+	inv, err := oh.orgs.Invite(context.Background(), org.InviteInput{
+		OrgID: acme.ID, InviterID: "usr_other", Email: "dev@acme.dev", Role: org.RoleDeveloper,
+	})
+	if err != nil {
+		t.Fatalf("invite: %v", err)
+	}
+	if _, err := oh.orgs.MemberRole(context.Background(), acme.ID, "usr_1"); err == nil {
+		t.Fatal("usr_1 must not be a member before accepting")
+	}
 
 	// Accepting grants the membership.
-	r = h.do("POST", "/api/v1/invitations/accept", map[string]any{"token": token}, nil)
+	r := h.do("POST", "/api/v1/invitations/accept", map[string]any{"token": inv.Token}, nil)
 	expect(t, r, 200, "")
 	if r.body["id"] != acme.ID {
 		t.Errorf("accept returned %v, want the organization", r.body["id"])
 	}
 	role, err := oh.orgs.MemberRole(context.Background(), acme.ID, "usr_1")
-	if err != nil || role == "" {
+	if err != nil || role != org.RoleDeveloper {
 		t.Errorf("membership not created: role=%q err=%v", role, err)
 	}
 
 	// Replaying the token fails, and is reported the same way as an unknown one.
-	expect(t, h.do("POST", "/api/v1/invitations/accept", map[string]any{"token": token}, nil), 404, CodeNotFound)
+	expect(t, h.do("POST", "/api/v1/invitations/accept", map[string]any{"token": inv.Token}, nil), 404, CodeNotFound)
 	expect(t, h.do("POST", "/api/v1/invitations/accept", map[string]any{"token": "bogus"}, nil), 404, CodeNotFound)
 }
