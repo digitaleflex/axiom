@@ -261,14 +261,24 @@ func TestServeDispatchesOperationsAndDrains(t *testing.T) {
 		t.Fatalf("rejected operation carries no stable code: %s", body)
 	}
 
+	// The metrics endpoint is mounted next to the operations listener.
+	metricsResp, err := http.Get(base + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metricsResp.Body.Close()
+	if metricsResp.StatusCode != http.StatusOK {
+		t.Fatalf("/metrics = %d, want 200", metricsResp.StatusCode)
+	}
+
 	// Unknown paths are not served at all.
-	notFound, err := http.Get(base + "/metrics")
+	notFound, err := http.Get(base + "/unknown")
 	if err != nil {
 		t.Fatal(err)
 	}
 	notFound.Body.Close()
 	if notFound.StatusCode != http.StatusNotFound {
-		t.Fatalf("/metrics = %d, want 404", notFound.StatusCode)
+		t.Fatalf("/unknown = %d, want 404", notFound.StatusCode)
 	}
 
 	// The agent registered and the heartbeat loop is really running.
