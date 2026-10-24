@@ -133,7 +133,8 @@ func (c *Client) CreateApplication(ctx context.Context, spec execution.Applicati
 		HealthCheckReturnCode:   200,
 	}
 	if spec.Domain != "" {
-		body.Domains = spec.Domain
+		// Coolify rejects a domain without an http(s) scheme.
+		body.Domains = urlForDomain(spec.Domain)
 	}
 	if spec.DestinationID != "" {
 		body.DestinationUUID = spec.DestinationID
@@ -245,24 +246,26 @@ type createImageApplicationRequest struct {
 	Description             string `json:"description,omitempty"`
 	Domains                 string `json:"domains,omitempty"`
 	DestinationUUID         string `json:"destination_uuid,omitempty"`
-	InstantDeploy            bool   `json:"instant_deploy"`
-	HealthCheckEnabled       bool   `json:"health_check_enabled"`
-	HealthCheckPath          string `json:"health_check_path"`
-	HealthCheckPort          string `json:"health_check_port"`
-	HealthCheckMethod        string `json:"health_check_method"`
-	HealthCheckScheme        string `json:"health_check_scheme"`
-	HealthCheckReturnCode    int    `json:"health_check_return_code"`
-	MemoryLimit              string `json:"limits_memory,omitempty"`
-	CPULimit                 string `json:"limits_cpus,omitempty"`
+	InstantDeploy           bool   `json:"instant_deploy"`
+	HealthCheckEnabled      bool   `json:"health_check_enabled"`
+	HealthCheckPath         string `json:"health_check_path"`
+	HealthCheckPort         string `json:"health_check_port"`
+	HealthCheckMethod       string `json:"health_check_method"`
+	HealthCheckScheme       string `json:"health_check_scheme"`
+	HealthCheckReturnCode   int    `json:"health_check_return_code"`
+	MemoryLimit             string `json:"limits_memory,omitempty"`
+	CPULimit                string `json:"limits_cpus,omitempty"`
 }
 
 type deploymentResponse struct {
 	DeploymentUUID string `json:"deployment_uuid"`
-	ApplicationID  string `json:"application_id"`
-	Status         string `json:"status"`
-	DeploymentURL  string `json:"deployment_url"`
-	CreatedAt      string `json:"created_at"`
-	UpdatedAt      string `json:"updated_at"`
+	// ApplicationID is Coolify's internal application id (a varchar holding
+	// the numeric primary key), not the application UUID used by Deploy.
+	ApplicationID string `json:"application_id"`
+	Status        string `json:"status"`
+	DeploymentURL string `json:"deployment_url"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
 }
 
 type applicationResponse struct {
@@ -348,6 +351,19 @@ func validateSpec(spec execution.ApplicationSpec) error {
 
 func normalizeStatus(raw string) execution.Status {
 	s := strings.ToLower(strings.TrimSpace(raw))
+	// Exact values of Coolify's ApplicationDeploymentStatus enum come first.
+	switch s {
+	case "queued":
+		return execution.StatusQueued
+	case "in_progress":
+		return execution.StatusDeploying
+	case "finished":
+		return execution.StatusSucceeded
+	case "failed":
+		return execution.StatusFailed
+	case "cancelled-by-user":
+		return execution.StatusCancelled
+	}
 	switch {
 	case strings.Contains(s, "cancel"):
 		return execution.StatusCancelled
@@ -357,7 +373,7 @@ func normalizeStatus(raw string) execution.Status {
 		return execution.StatusQueued
 	case strings.Contains(s, "build"), strings.Contains(s, "install"), strings.Contains(s, "clone"):
 		return execution.StatusBuilding
-	case strings.Contains(s, "deploy"), strings.Contains(s, "running"), strings.Contains(s, "in progress"):
+	case strings.Contains(s, "deploy"), strings.Contains(s, "running"), strings.Contains(s, "progress"):
 		return execution.StatusDeploying
 	case strings.Contains(s, "finished"), strings.Contains(s, "success"), strings.Contains(s, "completed"):
 		return execution.StatusSucceeded

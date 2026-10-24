@@ -48,6 +48,9 @@ func TestCreateApplicationUsesPrebuiltImageAndExplicitConfiguration(t *testing.T
 		if body["instant_deploy"] != false {
 			t.Fatalf("creation must not trigger an implicit deployment: %#v", body["instant_deploy"])
 		}
+		if body["domains"] != "https://web.example.com" {
+			t.Fatalf("Coolify requires a scheme on domains, got %#v", body["domains"])
+		}
 		if body["build_pack"] != nil {
 			t.Fatalf("Axiom's prebuilt image path must not request a Coolify build pack: %#v", body["build_pack"])
 		}
@@ -181,5 +184,23 @@ func TestAPIErrorDoesNotExposeResponseBodyWhenMessageMissing(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "secret-provider-detail") {
 		t.Fatal("provider response body must not be copied into the error")
+	}
+}
+
+func TestNormalizeStatusCoversCoolifyDeploymentStatuses(t *testing.T) {
+	// The exact values of Coolify's ApplicationDeploymentStatus enum.
+	cases := map[string]execution.Status{
+		"queued":            execution.StatusQueued,
+		"in_progress":       execution.StatusDeploying,
+		"finished":          execution.StatusSucceeded,
+		"failed":            execution.StatusFailed,
+		"cancelled-by-user": execution.StatusCancelled,
+		"":                  execution.StatusUnknown,
+		"something-new":     execution.StatusUnknown,
+	}
+	for raw, want := range cases {
+		if got := normalizeStatus(raw); got != want {
+			t.Errorf("normalizeStatus(%q) = %q, want %q", raw, got, want)
+		}
 	}
 }
