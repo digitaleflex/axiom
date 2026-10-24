@@ -332,6 +332,11 @@ type roleAdapter struct{ orgs *org.Service }
 func (r roleAdapter) MemberRole(ctx context.Context, orgID, userID string) (project.Role, error) {
 	role, err := r.orgs.MemberRole(ctx, orgID, userID)
 	if err != nil {
+		// A non-member is the project package's "not found": it cannot import
+		// org, and a raw org sentinel would surface as a 500.
+		if errors.Is(err, org.ErrNotAMember) || errors.Is(err, org.ErrNotFound) {
+			return "", project.ErrNotFound
+		}
 		return "", err
 	}
 	return project.Role(role), nil

@@ -55,10 +55,10 @@ type Record struct {
 	// DeploymentID is the deployment currently serving the project, empty when
 	// it has never been deployed. It is a convenience pointer for the dashboard,
 	// never a source of truth: the deployment list remains authoritative.
-	DeploymentID  string    `json:"deploymentId,omitempty"`
-	CreatedBy     string    `json:"createdBy,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	DeploymentID string    `json:"deploymentId,omitempty"`
+	CreatedBy    string    `json:"createdBy,omitempty"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
 // Deployed reports whether the project has ever been deployed.

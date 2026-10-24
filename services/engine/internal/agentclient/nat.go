@@ -158,9 +158,9 @@ func (n *natAgent) HealthCheck(ctx context.Context, req executor.HealthCheckRequ
 		return health.ProbeReport{}, err
 	}
 	payload := map[string]any{
-		"domain":          req.Domain,
-		"path":            req.Path,
-		"timeoutSeconds":  req.TimeoutSeconds,
+		"domain":         req.Domain,
+		"path":           req.Path,
+		"timeoutSeconds": req.TimeoutSeconds,
 	}
 	body, err := n.buildOperation(req.Operation, "VERIFY", payload)
 	if err != nil {
@@ -183,10 +183,10 @@ func (n *natAgent) HealthCheck(ctx context.Context, req executor.HealthCheckRequ
 	}
 	// Parse the result body (acknowledgement + result).
 	var result struct {
-		Health *healthReport `json:"health"`
-		Success *bool `json:"success"`
-		ErrorCode string `json:"errorCode"`
-		Message string `json:"message"`
+		Health    *healthReport `json:"health"`
+		Success   *bool         `json:"success"`
+		ErrorCode string        `json:"errorCode"`
+		Message   string        `json:"message"`
 	}
 	if err := json.Unmarshal(resultOp.Body, &result); err != nil {
 		return health.ProbeReport{}, err

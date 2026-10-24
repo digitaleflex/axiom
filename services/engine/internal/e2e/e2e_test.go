@@ -223,26 +223,26 @@ func setupDB(t *testing.T, ctx context.Context) *sql.DB {
 // agentkey) est bloqué dans ce processus par trois points de rupture
 // documentés précisément :
 //
-// 1. Module : services/engine/go.mod (module engine) ne déclare pas le
-//    module agent (github.com/digitaleflex/axiom/services/agent) ; l'import
-//    de agent/bootstrap échouerait au build (go build : package not found).
-// 2. Listener : bootstrap.inboundAuthenticator() (bootstrap.go:276) monte
-//    refuseInbound{} tant que operationkey.Store.Current() (operationkey.go:216)
-//    est vide ; la clé est émise par register() (register.go:135) après
-//    enregistrement Engine→Agent, qui nécessite auth.Client (credentials
-//    persistés) et un listener déjà lancé — cycle impossible dans le même
-//    processus engine sans monter le module agent complet.
-// 3. Listener : listener.go:132 (l.auth.Authenticate) refuse avec 401 AVANT
-//    lecture du corps ; listener.go:170 (l.auth.VerifyOperation) vérifie
-//    l'HMAC sur le corps exact ; sans clé et sans signature, le protocole
-//    (protocol.go:230 applicationRe, protocol.go:214 Validate) est refusé
-//    avant dispatch. Le chemin ApplicationID séparé (d6e8dd2) et HMAC
-//    agentkey (e5ac65b) sont montés dans internal/protocol/ et
-//    agent/security/operationkey/ mais jamais traversés par ce test.
+//  1. Module : services/engine/go.mod (module engine) ne déclare pas le
+//     module agent (github.com/digitaleflex/axiom/services/agent) ; l'import
+//     de agent/bootstrap échouerait au build (go build : package not found).
+//  2. Listener : bootstrap.inboundAuthenticator() (bootstrap.go:276) monte
+//     refuseInbound{} tant que operationkey.Store.Current() (operationkey.go:216)
+//     est vide ; la clé est émise par register() (register.go:135) après
+//     enregistrement Engine→Agent, qui nécessite auth.Client (credentials
+//     persistés) et un listener déjà lancé — cycle impossible dans le même
+//     processus engine sans monter le module agent complet.
+//  3. Listener : listener.go:132 (l.auth.Authenticate) refuse avec 401 AVANT
+//     lecture du corps ; listener.go:170 (l.auth.VerifyOperation) vérifie
+//     l'HMAC sur le corps exact ; sans clé et sans signature, le protocole
+//     (protocol.go:230 applicationRe, protocol.go:214 Validate) est refusé
+//     avant dispatch. Le chemin ApplicationID séparé (d6e8dd2) et HMAC
+//     agentkey (e5ac65b) sont montés dans internal/protocol/ et
+//     agent/security/operationkey/ mais jamais traversés par ce test.
 //
 // Branche : AXIOM_AGENT_PROTOCOL_E2E=1 tente le client réseau (documenté);
 // sinon dockerAgent reste le fallback pour ne pas casser le build.
-	type protocolAgent struct {
+type protocolAgent struct {
 	t                 *testing.T
 	addr              string
 	hasTLS            bool
