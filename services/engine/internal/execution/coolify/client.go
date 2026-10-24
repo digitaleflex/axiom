@@ -164,7 +164,7 @@ func (c *Client) CreateApplication(ctx context.Context, spec execution.Applicati
 // GetDeployment and then perform an independent external health check.
 func (c *Client) Deploy(ctx context.Context, applicationID, image, tag string) (execution.Deployment, error) {
 	if strings.TrimSpace(applicationID) == "" || strings.TrimSpace(image) == "" || strings.TrimSpace(tag) == "" {
-		return execution.Deployment{}, errors.New("coolify application ID, image name and image tag are required")
+		return execution.Deployment{}, errors.New("coolify application ID, image name and immutable image tag are required")
 	}
 	update := map[string]any{
 		"docker_registry_image_name": image,
@@ -187,7 +187,7 @@ func (c *Client) Deploy(ctx context.Context, applicationID, image, tag string) (
 			DeploymentUUID string `json:"deployment_uuid"`
 		} `json:"deployments"`
 	}
-	if err := c.doJSON(ctx, http.MethodPost, "/deploy", query, map[string]any{}, &response); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, "/deploy", query, nil, &response); err != nil {
 		return execution.Deployment{}, err
 	}
 	if len(response.Deployments) == 0 || response.Deployments[0].DeploymentUUID == "" {
@@ -201,6 +201,8 @@ func (c *Client) Deploy(ctx context.Context, applicationID, image, tag string) (
 }
 
 // GetDeployment retrieves a deployment by its Coolify deployment UUID.
+// Raw provider logs are intentionally not copied into Message; callers should
+// retrieve and redact logs through a dedicated, bounded log path.
 func (c *Client) GetDeployment(ctx context.Context, deploymentID string) (execution.Deployment, error) {
 	if strings.TrimSpace(deploymentID) == "" {
 		return execution.Deployment{}, errors.New("coolify deployment ID is required")
@@ -209,12 +211,10 @@ func (c *Client) GetDeployment(ctx context.Context, deploymentID string) (execut
 	if err := c.doJSON(ctx, http.MethodGet, "/deployments/"+url.PathEscape(deploymentID), nil, nil, &response); err != nil {
 		return execution.Deployment{}, err
 	}
-	status := normalizeStatus(response.Status)
 	return execution.Deployment{
 		Provider: providerName, ProviderID: response.DeploymentUUID,
-		ApplicationID: response.ApplicationID, Status: status,
+		ApplicationID: response.ApplicationID, Status: normalizeStatus(response.Status),
 		RawStatus: response.Status, URL: response.DeploymentURL,
-		Message: safeMessage(response.Logs),
 		CreatedAt: parseTime(response.CreatedAt), UpdatedAt: parseTime(response.UpdatedAt),
 	}, nil
 }
@@ -239,12 +239,12 @@ type createImageApplicationRequest struct {
 	ServerUUID              string `json:"server_uuid"`
 	EnvironmentName         string `json:"environment_name"`
 	DockerRegistryImageName string `json:"docker_registry_image_name"`
-	DockerRegistryImageTag  string `json:"docker_registry_image_tag,omitempty"`
+	DockerRegistryImageTag  string `json:"docker_registry_image_tag"`
 	PortsExposes            string `json:"ports_exposes"`
 	Name                    string `json:"name,omitempty"`
 	Description             string `json:"description,omitempty"`
 	Domains                 string `json:"domains,omitempty"`
-	DestinationUUID          string `json:"destination_uuid,omitempty"`
+	DestinationUUID         string `json:"destination_uuid,omitempty"`
 	InstantDeploy            bool   `json:"instant_deploy"`
 	HealthCheckEnabled       bool   `json:"health_check_enabled"`
 	HealthCheckPath          string `json:"health_check_path"`
@@ -261,17 +261,16 @@ type deploymentResponse struct {
 	ApplicationID  string `json:"application_id"`
 	Status         string `json:"status"`
 	DeploymentURL  string `json:"deployment_url"`
-	Logs           string `json:"logs"`
 	CreatedAt      string `json:"created_at"`
 	UpdatedAt      string `json:"updated_at"`
 }
 
 type applicationResponse struct {
-	UUID   string `json:"uuid"`
-	Name   string `json:"name"`
-	FQDN   string `json:"fqdn"`
+	UUID    string `json:"uuid"`
+	Name    string `json:"name"`
+	FQDN    string `json:"fqdn"`
 	Domains string `json:"domains"`
-	Status string `json:"status"`
+	Status  string `json:"status"`
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, query url.Values, body, out any) error {
@@ -333,6 +332,8 @@ func validateSpec(spec execution.ApplicationSpec) error {
 		return errors.New("application name is required")
 	case strings.TrimSpace(spec.Image) == "":
 		return errors.New("registry image name is required")
+	case strings.TrimSpace(spec.ImageTag) == "":
+		return errors.New("immutable registry image tag is required")
 	case strings.TrimSpace(spec.ProjectID) == "":
 		return errors.New("Coolify project UUID is required")
 	case strings.TrimSpace(spec.ServerID) == "":
@@ -368,7 +369,7 @@ func normalizeStatus(raw string) execution.Status {
 func safeMessage(value string) string {
 	value = strings.TrimSpace(value)
 	if len(value) > 500 {
-		value = value[len(value)-500:]
+		value = value[:500]
 	}
 	return value
 }
